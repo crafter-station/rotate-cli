@@ -302,6 +302,12 @@ export async function runCli(argv: string[]): Promise<void> {
     .option("--max-rotations <n>", "hard cap on rotations", (v) => Number.parseInt(v, 10))
     .option("--parallel <n>", "consumer propagation concurrency", (v) => Number.parseInt(v, 10), 10)
     .option("--no-verify", "skip verify step (forbidden in agent mode)")
+    .option("--skip-unknown", "skip secrets where ownership cannot be determined")
+    .option(
+      "--force-rotate-other",
+      "rotate even when the secret belongs to another account (changes billing)",
+    )
+    .option("--no-ownership-check", "disable the ownership gate entirely (forbidden in agent mode)")
     .action(
       async (
         idsArg: string[] | undefined,
@@ -311,11 +317,15 @@ export async function runCli(argv: string[]): Promise<void> {
           maxRotations?: number;
           parallel: number;
           verify: boolean;
+          skipUnknown?: boolean;
+          forceRotateOther?: boolean;
+          ownershipCheck?: boolean;
         },
       ) => {
         const ids = idsArg ?? [];
         const started = Date.now();
         const globalOpts = program.opts();
+        const noOwnershipCheck = opts.ownershipCheck === false;
         enforceAgentMode({
           command: "apply",
           reason: globalOpts.reason,
@@ -323,6 +333,8 @@ export async function runCli(argv: string[]): Promise<void> {
           maxRotations: opts.maxRotations,
           auditLog: globalOpts.auditLog,
           skipVerify: opts.verify === false,
+          noOwnershipCheck,
+          forceRotateOther: opts.forceRotateOther,
         });
         const config = loadConfig(globalOpts.config);
         const selected = selectByQuery(config, { ids, provider: opts.provider, tag: opts.tag });
@@ -347,10 +359,14 @@ export async function runCli(argv: string[]): Promise<void> {
           );
           return;
         }
-        const { map: preloadMap } = await preloadOwnershipForSecrets(selected);
+        const { map: preloadMap } = noOwnershipCheck
+          ? { map: new Map() }
+          : await preloadOwnershipForSecrets(selected);
         const results = [];
         for (const secret of selected) {
-          const { value: currentValue } = await resolveCurrentValue(secret);
+          const { value: currentValue } = noOwnershipCheck
+            ? { value: null }
+            : await resolveCurrentValue(secret);
           const r = await applyRotation(secret, {
             reason: globalOpts.reason,
             agentMode: isAgentMode(),
@@ -359,6 +375,9 @@ export async function runCli(argv: string[]): Promise<void> {
             skipVerify: opts.verify === false,
             currentValue: currentValue ?? undefined,
             ownershipPreload: preloadMap.get(secret.adapter),
+            skipUnknown: opts.skipUnknown,
+            forceRotateOther: opts.forceRotateOther,
+            noOwnershipCheck,
           });
           results.push(r);
         }
@@ -565,104 +584,133 @@ export async function runCli(argv: string[]): Promise<void> {
     .argument("<file>", "incident YAML file")
     .option("--max-rotations <n>", "hard cap", (v) => Number.parseInt(v, 10))
     .option("--dry-run", "print the plan without rotating anything")
-    .action(async (file: string, opts: { maxRotations?: number; dryRun?: boolean }) => {
-      const started = Date.now();
-      const globalOpts = program.opts();
-      if (!opts.dryRun) {
-        enforceAgentMode({
-          command: "incident",
-          reason: globalOpts.reason,
-          yes: globalOpts.yes,
-          auditLog: globalOpts.auditLog,
-          maxRotations: opts.maxRotations,
-        });
-      }
-      const config = loadConfig(globalOpts.config);
-      const incident = loadIncident(file);
-      const selected = selectByIncident(config, incident);
-      assertMaxRotations(selected.length, opts.maxRotations);
-      process.stderr.write(`Incident ${incident.id}: ${selected.length} secret(s) match scope.\n`);
-      if (opts.dryRun) {
+    .option("--skip-unknown", "skip secrets where ownership cannot be determined")
+    .option(
+      "--force-rotate-other",
+      "rotate even when a secret belongs to another account (changes billing)",
+    )
+    .option("--no-ownership-check", "disable the ownership gate entirely")
+    .action(
+      async (
+        file: string,
+        opts: {
+          maxRotations?: number;
+          dryRun?: boolean;
+          skipUnknown?: boolean;
+          forceRotateOther?: boolean;
+          ownershipCheck?: boolean;
+        },
+      ) => {
+        const started = Date.now();
+        const globalOpts = program.opts();
+        const noOwnershipCheck = opts.ownershipCheck === false;
+        if (!opts.dryRun) {
+          enforceAgentMode({
+            command: "incident",
+            reason: globalOpts.reason,
+            yes: globalOpts.yes,
+            auditLog: globalOpts.auditLog,
+            maxRotations: opts.maxRotations,
+            noOwnershipCheck,
+            forceRotateOther: opts.forceRotateOther,
+          });
+        }
+        const config = loadConfig(globalOpts.config);
+        const incident = loadIncident(file);
+        const selected = selectByIncident(config, incident);
+        assertMaxRotations(selected.length, opts.maxRotations);
+        process.stderr.write(
+          `Incident ${incident.id}: ${selected.length} secret(s) match scope.\n`,
+        );
+        if (opts.dryRun) {
+          emit(
+            makeEnvelope({
+              command: "incident",
+              status: "success",
+              startedAt: started,
+              agentMode: isAgentMode(),
+              data: {
+                incident_id: incident.id,
+                dry_run: true,
+                affected: selected.length,
+                rotations: selected.map((s) => ({
+                  secret_id: s.id,
+                  adapter: s.adapter,
+                  consumers: s.consumers.map((c) => `${c.type}/${c.params.var_name}`),
+                })),
+              },
+              next_actions: selected.length
+                ? [`Run \`rotate incident ${file} --yes --reason "..."\` to execute`]
+                : ["No secrets matched the incident scope — check tags in rotate.config.yaml"],
+            }),
+            EXIT.OK,
+          );
+          return;
+        }
+        const { map: preloadMap } = noOwnershipCheck
+          ? { map: new Map() }
+          : await preloadOwnershipForSecrets(selected);
+        const results = [];
+        for (const secret of selected) {
+          const { value: currentValue } = noOwnershipCheck
+            ? { value: null }
+            : await resolveCurrentValue(secret);
+          const r = await applyRotation(secret, {
+            reason: globalOpts.reason ?? `incident:${incident.id}`,
+            agentMode: isAgentMode(),
+            auditLog: globalOpts.auditLog,
+            currentValue: currentValue ?? undefined,
+            ownershipPreload: preloadMap.get(secret.adapter),
+            skipUnknown: opts.skipUnknown,
+            forceRotateOther: opts.forceRotateOther,
+            noOwnershipCheck,
+          });
+          results.push(r);
+        }
+        const anyError = results.some((r) => r.envelopeStatus === "error");
+        const skippedResults = results.filter((r) => r.envelopeStatus === "skipped");
+        const skipped = skippedResults.map((r) => ({
+          secret_id: r.rotation.secretId,
+          adapter: r.rotation.adapter,
+          reason: r.rotation.skipReason?.kind,
+          evidence: r.rotation.skipReason?.evidence,
+          verdict: r.rotation.ownership?.verdict,
+          strategy: r.rotation.ownership?.strategy,
+        }));
+        const ownershipSummary = buildOwnershipSummary(results);
+        const skipActions = buildSkipActions(skippedResults);
         emit(
           makeEnvelope({
             command: "incident",
-            status: "success",
+            status: anyError ? "partial" : "success",
             startedAt: started,
             agentMode: isAgentMode(),
             data: {
               incident_id: incident.id,
-              dry_run: true,
               affected: selected.length,
-              rotations: selected.map((s) => ({
-                secret_id: s.id,
-                adapter: s.adapter,
-                consumers: s.consumers.map((c) => `${c.type}/${c.params.var_name}`),
-              })),
+              rotations: results
+                .filter((r) => r.envelopeStatus !== "skipped")
+                .map((r) => ({
+                  rotation_id: r.rotation.id,
+                  secret_id: r.rotation.secretId,
+                  status: r.rotation.status,
+                })),
+              skipped,
+              ownership_summary: ownershipSummary,
             },
-            next_actions: selected.length
-              ? [`Run \`rotate incident ${file} --yes --reason "..."\` to execute`]
-              : ["No secrets matched the incident scope — check tags in rotate.config.yaml"],
+            next_actions: [
+              ...results
+                .filter((r) => r.rotation.status === "in_grace")
+                .map(
+                  (r) => `Check \`rotate status ${r.rotation.id}\` then revoke when consumers sync`,
+                ),
+              ...skipActions,
+            ],
           }),
-          EXIT.OK,
+          anyError ? EXIT.PROVIDER_ERROR : EXIT.OK,
         );
-        return;
-      }
-      const { map: preloadMap } = await preloadOwnershipForSecrets(selected);
-      const results = [];
-      for (const secret of selected) {
-        const { value: currentValue } = await resolveCurrentValue(secret);
-        const r = await applyRotation(secret, {
-          reason: globalOpts.reason ?? `incident:${incident.id}`,
-          agentMode: isAgentMode(),
-          auditLog: globalOpts.auditLog,
-          currentValue: currentValue ?? undefined,
-          ownershipPreload: preloadMap.get(secret.adapter),
-        });
-        results.push(r);
-      }
-      const anyError = results.some((r) => r.envelopeStatus === "error");
-      const skippedResults = results.filter((r) => r.envelopeStatus === "skipped");
-      const skipped = skippedResults.map((r) => ({
-        secret_id: r.rotation.secretId,
-        adapter: r.rotation.adapter,
-        reason: r.rotation.skipReason?.kind,
-        evidence: r.rotation.skipReason?.evidence,
-        verdict: r.rotation.ownership?.verdict,
-        strategy: r.rotation.ownership?.strategy,
-      }));
-      const ownershipSummary = buildOwnershipSummary(results);
-      const skipActions = buildSkipActions(skippedResults);
-      emit(
-        makeEnvelope({
-          command: "incident",
-          status: anyError ? "partial" : "success",
-          startedAt: started,
-          agentMode: isAgentMode(),
-          data: {
-            incident_id: incident.id,
-            affected: selected.length,
-            rotations: results
-              .filter((r) => r.envelopeStatus !== "skipped")
-              .map((r) => ({
-                rotation_id: r.rotation.id,
-                secret_id: r.rotation.secretId,
-                status: r.rotation.status,
-              })),
-            skipped,
-            ownership_summary: ownershipSummary,
-          },
-          next_actions: [
-            ...results
-              .filter((r) => r.rotation.status === "in_grace")
-              .map(
-                (r) => `Check \`rotate status ${r.rotation.id}\` then revoke when consumers sync`,
-              ),
-            ...skipActions,
-          ],
-        }),
-        anyError ? EXIT.PROVIDER_ERROR : EXIT.OK,
-      );
-    });
+      },
+    );
 
   try {
     await program.parseAsync(argv);

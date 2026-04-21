@@ -12,6 +12,8 @@ export interface AgentModeOptions {
   forceRevoke?: boolean;
   skipVerify?: boolean;
   revokeAfter?: string;
+  noOwnershipCheck?: boolean;
+  forceRotateOther?: boolean;
 }
 
 export function isAgentMode(): boolean {
@@ -41,6 +43,17 @@ export function enforceAgentMode(opts: AgentModeOptions): void {
     fail("--revoke-after forbidden in agent mode (revoke must be explicit)");
   }
   if (opts.skipVerify) fail("--no-verify forbidden in agent mode");
+
+  // Ownership-gate guardrails: agent cannot disable the check entirely.
+  if (opts.noOwnershipCheck) {
+    fail("--no-ownership-check forbidden in agent mode (gate protects billing)");
+  }
+  // --force-rotate-other is allowed but requires a longer reason.
+  if (opts.forceRotateOther && (opts.reason?.trim().length ?? 0) < 20) {
+    fail(
+      "--force-rotate-other requires --reason of at least 20 chars explaining the ownership override",
+    );
+  }
 
   checkRateLimit();
 }

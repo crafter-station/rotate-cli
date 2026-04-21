@@ -109,4 +109,46 @@ describe("agent-mode", () => {
       }),
     ).not.toThrow();
   });
+
+  test("--no-ownership-check forbidden in agent mode", () => {
+    process.env.ROTATE_CLI_AGENT_MODE = "1";
+    expect(() =>
+      enforceAgentMode({
+        command: "apply",
+        reason: "valid-reason-here",
+        yes: true,
+        auditLog: "/tmp/audit.jsonl",
+        maxRotations: 1,
+        noOwnershipCheck: true,
+      }),
+    ).toThrow(/--no-ownership-check/);
+  });
+
+  test("--force-rotate-other requires 20+ char reason in agent mode", () => {
+    process.env.ROTATE_CLI_AGENT_MODE = "1";
+    expect(() =>
+      enforceAgentMode({
+        command: "apply",
+        reason: "too short",
+        yes: true,
+        auditLog: "/tmp/audit.jsonl",
+        maxRotations: 1,
+        forceRotateOther: true,
+      }),
+    ).toThrow(/20 chars/);
+  });
+
+  test("--force-rotate-other allowed with long reason", () => {
+    process.env.ROTATE_CLI_AGENT_MODE = "1";
+    expect(() =>
+      enforceAgentMode({
+        command: "apply",
+        reason: "rotating anthony's keys because we split ownership today",
+        yes: true,
+        auditLog: "/tmp/audit.jsonl",
+        maxRotations: 1,
+        forceRotateOther: true,
+      }),
+    ).not.toThrow();
+  });
 });
