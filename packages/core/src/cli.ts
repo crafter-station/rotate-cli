@@ -24,6 +24,15 @@ import { EXIT, RotateError } from "./errors.ts";
 import { applyRotation, preloadOwnershipForSecrets, revokeRotation } from "./orchestrator.ts";
 import { createPromptIO } from "./prompt.ts";
 import { getAdapter, listAdapters, listConsumers } from "./registry.ts";
+import {
+  renderApply,
+  renderDoctor,
+  renderPlan,
+  renderPreviewOwnership,
+  renderRevoke,
+  shouldRenderPretty as renderShouldPretty,
+  renderStatusList,
+} from "./render.ts";
 import type { PromptChoice, PromptIO } from "./types.ts";
 
 export async function runCli(argv: string[]): Promise<void> {
@@ -244,6 +253,10 @@ export async function runCli(argv: string[]): Promise<void> {
         }
       }
       const failing = rows.filter((r) => !r.ok);
+      if (shouldRenderPretty(program)) {
+        renderDoctor(rows);
+        process.exit(failing.length ? EXIT.PROVIDER_ERROR : EXIT.OK);
+      }
       emit(
         makeEnvelope({
           command: "doctor",
@@ -272,20 +285,23 @@ export async function runCli(argv: string[]): Promise<void> {
         provider: opts.provider,
         tag: opts.tag,
       });
+      const planItems = selected.map((s) => ({
+        id: s.id,
+        adapter: s.adapter,
+        consumer_count: s.consumers.length,
+        consumers: s.consumers,
+      }));
+      if (shouldRenderPretty(program)) {
+        renderPlan(planItems);
+        process.exit(selected.length ? EXIT.OK : EXIT.USER_ERROR);
+      }
       emit(
         makeEnvelope({
           command: "plan",
           status: "success",
           startedAt: started,
           agentMode: isAgentMode(),
-          data: {
-            selected: selected.map((s) => ({
-              id: s.id,
-              adapter: s.adapter,
-              consumer_count: s.consumers.length,
-              consumers: s.consumers,
-            })),
-          },
+          data: { selected: planItems },
           next_actions: selected.length
             ? [`Run \`rotate apply ${(ids ?? []).join(" ")} --yes --reason "..."\` to execute`]
             : ["Selector matched no secrets — check rotate.config.yaml"],
@@ -410,6 +426,28 @@ export async function runCli(argv: string[]): Promise<void> {
         }));
         const ownershipSummary = buildOwnershipSummary(results);
         const skipActions = buildSkipActions(skippedResults);
+        const successfulRotations = results
+          .filter((r) => r.envelopeStatus !== "skipped")
+          .map((r) => ({
+            rotation_id: r.rotation.id,
+            secret_id: r.rotation.secretId,
+            status: r.rotation.status,
+            grace_period_ends: r.rotation.gracePeriodEndsAt,
+            consumers: r.rotation.consumers.map((c) => ({
+              target: c.target,
+              status: c.status,
+              error: c.error,
+            })),
+          }));
+        if (shouldRenderPretty(program)) {
+          renderApply(successfulRotations, skipped, ownershipSummary, [
+            ...nextActions,
+            ...skipActions,
+          ]);
+          process.exit(
+            anyError ? EXIT.PROVIDER_ERROR : anyPartial ? EXIT.IN_GRACE_WARNING : EXIT.OK,
+          );
+        }
         emit(
           makeEnvelope({
             command: "apply",
@@ -417,19 +455,7 @@ export async function runCli(argv: string[]): Promise<void> {
             startedAt: started,
             agentMode: isAgentMode(),
             data: {
-              rotations: results
-                .filter((r) => r.envelopeStatus !== "skipped")
-                .map((r) => ({
-                  rotation_id: r.rotation.id,
-                  secret_id: r.rotation.secretId,
-                  status: r.rotation.status,
-                  grace_period_ends: r.rotation.gracePeriodEndsAt,
-                  consumers: r.rotation.consumers.map((c) => ({
-                    target: c.target,
-                    status: c.status,
-                    error: c.error,
-                  })),
-                })),
+              rotations: successfulRotations,
               skipped,
               ownership_summary: ownershipSummary,
             },
@@ -560,6 +586,11 @@ export async function runCli(argv: string[]): Promise<void> {
         );
       }
 
+      const preloadErrorsObj = Object.fromEntries(preloadErrors);
+      if (shouldRenderPretty(program)) {
+        renderPreviewOwnership(checks, summary, preloadErrorsObj);
+        process.exit(EXIT.OK);
+      }
       emit(
         makeEnvelope({
           command: "preview-ownership",
@@ -570,7 +601,7 @@ export async function runCli(argv: string[]): Promise<void> {
             total: checks.length,
             checks,
             summary,
-            preload_errors: Object.fromEntries(preloadErrors),
+            preload_errors: preloadErrorsObj,
           },
           next_actions: nextActions,
         }),
@@ -625,23 +656,28 @@ export async function runCli(argv: string[]): Promise<void> {
         );
         return;
       }
+      const inFlight = checkpoints.map((c) => ({
+        rotation_id: c.rotationId,
+        secret_id: c.rotation.secretId,
+        status: c.rotation.status,
+        step_completed: c.stepCompleted,
+        grace_period_ends: c.rotation.gracePeriodEndsAt,
+      }));
+      if (shouldRenderPretty(program)) {
+        renderStatusList(inFlight);
+        process.exit(EXIT.OK);
+      }
       emit(
         makeEnvelope({
           command: "status",
           status: "success",
           startedAt: started,
           agentMode: isAgentMode(),
-          data: {
-            in_flight: checkpoints.map((c) => ({
-              rotation_id: c.rotationId,
-              secret_id: c.rotation.secretId,
-              status: c.rotation.status,
-              step_completed: c.stepCompleted,
-              grace_period_ends: c.rotation.gracePeriodEndsAt,
-            })),
-          },
+          data: { in_flight: inFlight },
           next_actions: checkpoints.length
-            ? [`${checkpoints.length} rotation(s) in flight; inspect via \`rotate status <id>\``]
+            ? [
+                `${checkpoints.length} rotation(s) in flight; inspect via \`rotate-cli status <id>\``,
+              ]
             : ["No rotations in flight"],
         }),
         EXIT.OK,
@@ -704,6 +740,10 @@ export async function runCli(argv: string[]): Promise<void> {
       }
       saveCheckpoint({ ...c, rotation: c.rotation, savedAt: new Date().toISOString() });
       archiveToHistory(c.rotation);
+      if (shouldRenderPretty(program)) {
+        renderRevoke(rotationId);
+        process.exit(EXIT.OK);
+      }
       emit(
         makeEnvelope({
           command: "revoke",
@@ -897,10 +937,7 @@ async function promptForAuthProvider(io: PromptIO): Promise<string> {
 }
 
 function shouldRenderPretty(program: Command): boolean {
-  const opts = program.opts<{ json?: boolean; pretty?: boolean }>();
-  if (opts.json) return false;
-  if (opts.pretty) return true;
-  return true;
+  return renderShouldPretty(program.opts<{ json?: boolean; pretty?: boolean }>());
 }
 
 // Convenience helper for audit-log append from tests.
