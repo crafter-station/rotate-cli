@@ -89,13 +89,17 @@ export async function runCli(argv: string[]): Promise<void> {
 
   program
     .command("plan")
-    .argument("<selector...>", "secret identifiers or queries")
+    .argument("[selector...]", "secret identifiers (optional; use --provider/--tag for queries)")
     .option("--provider <name>")
     .option("--tag <name>")
-    .action((ids: string[], opts: { provider?: string; tag?: string }) => {
+    .action((ids: string[] | undefined, opts: { provider?: string; tag?: string }) => {
       const started = Date.now();
       const config = loadConfig(program.opts().config);
-      const selected = selectByQuery(config, { ids, provider: opts.provider, tag: opts.tag });
+      const selected = selectByQuery(config, {
+        ids: ids ?? [],
+        provider: opts.provider,
+        tag: opts.tag,
+      });
       emit(
         makeEnvelope({
           command: "plan",
@@ -111,7 +115,7 @@ export async function runCli(argv: string[]): Promise<void> {
             })),
           },
           next_actions: selected.length
-            ? [`Run \`rotate apply ${ids.join(" ")} --yes --reason "..."\` to execute`]
+            ? [`Run \`rotate apply ${(ids ?? []).join(" ")} --yes --reason "..."\` to execute`]
             : ["Selector matched no secrets — check rotate.config.yaml"],
         }),
         selected.length ? EXIT.OK : EXIT.USER_ERROR,
@@ -120,7 +124,7 @@ export async function runCli(argv: string[]): Promise<void> {
 
   program
     .command("apply")
-    .argument("<selector...>", "secret identifiers")
+    .argument("[selector...]", "secret identifiers (optional with --provider/--tag)")
     .option("--provider <name>")
     .option("--tag <name>")
     .option("--max-rotations <n>", "hard cap on rotations", (v) => Number.parseInt(v, 10))
@@ -128,7 +132,7 @@ export async function runCli(argv: string[]): Promise<void> {
     .option("--no-verify", "skip verify step (forbidden in agent mode)")
     .action(
       async (
-        ids: string[],
+        idsArg: string[] | undefined,
         opts: {
           provider?: string;
           tag?: string;
@@ -137,6 +141,7 @@ export async function runCli(argv: string[]): Promise<void> {
           verify: boolean;
         },
       ) => {
+        const ids = idsArg ?? [];
         const started = Date.now();
         const globalOpts = program.opts();
         enforceAgentMode({
@@ -359,21 +364,49 @@ export async function runCli(argv: string[]): Promise<void> {
     .command("incident")
     .argument("<file>", "incident YAML file")
     .option("--max-rotations <n>", "hard cap", (v) => Number.parseInt(v, 10))
-    .action(async (file: string, opts: { maxRotations?: number }) => {
+    .option("--dry-run", "print the plan without rotating anything")
+    .action(async (file: string, opts: { maxRotations?: number; dryRun?: boolean }) => {
       const started = Date.now();
       const globalOpts = program.opts();
-      enforceAgentMode({
-        command: "incident",
-        reason: globalOpts.reason,
-        yes: globalOpts.yes,
-        auditLog: globalOpts.auditLog,
-        maxRotations: opts.maxRotations,
-      });
+      if (!opts.dryRun) {
+        enforceAgentMode({
+          command: "incident",
+          reason: globalOpts.reason,
+          yes: globalOpts.yes,
+          auditLog: globalOpts.auditLog,
+          maxRotations: opts.maxRotations,
+        });
+      }
       const config = loadConfig(globalOpts.config);
       const incident = loadIncident(file);
       const selected = selectByIncident(config, incident);
       assertMaxRotations(selected.length, opts.maxRotations);
       process.stderr.write(`Incident ${incident.id}: ${selected.length} secret(s) match scope.\n`);
+      if (opts.dryRun) {
+        emit(
+          makeEnvelope({
+            command: "incident",
+            status: "success",
+            startedAt: started,
+            agentMode: isAgentMode(),
+            data: {
+              incident_id: incident.id,
+              dry_run: true,
+              affected: selected.length,
+              rotations: selected.map((s) => ({
+                secret_id: s.id,
+                adapter: s.adapter,
+                consumers: s.consumers.map((c) => `${c.type}/${c.params.var_name}`),
+              })),
+            },
+            next_actions: selected.length
+              ? [`Run \`rotate incident ${file} --yes --reason "..."\` to execute`]
+              : ["No secrets matched the incident scope — check tags in rotate.config.yaml"],
+          }),
+          EXIT.OK,
+        );
+        return;
+      }
       const results = [];
       for (const secret of selected) {
         const r = await applyRotation(secret, {

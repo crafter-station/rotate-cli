@@ -6,3 +6,4 @@ export * from "./checkpoints.ts";
 export * from "./orchestrator.ts";
 export * from "./agent-mode.ts";
 export * from "./registry.ts";
+export { runCli } from "./cli.ts";
