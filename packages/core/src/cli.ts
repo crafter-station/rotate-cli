@@ -274,6 +274,7 @@ export async function runCli(argv: string[]): Promise<void> {
 
   program
     .command("plan")
+    .description("dry-run: print the rotation plan without mutating anything")
     .argument("[selector...]", "secret identifiers (optional; use --provider/--tag for queries)")
     .option("--provider <name>")
     .option("--tag <name>")
@@ -312,6 +313,7 @@ export async function runCli(argv: string[]): Promise<void> {
 
   program
     .command("apply")
+    .description("rotate secrets: create new, propagate to consumers, verify, enter grace")
     .argument("[selector...]", "secret identifiers (optional with --provider/--tag)")
     .option("--provider <name>")
     .option("--tag <name>")
@@ -468,6 +470,7 @@ export async function runCli(argv: string[]): Promise<void> {
 
   program
     .command("preview-ownership")
+    .alias("who")
     .description("check which secrets you own without rotating anything")
     .argument("[selector...]", "secret identifiers (optional with --provider/--tag)")
     .option("--provider <name>")
@@ -611,6 +614,8 @@ export async function runCli(argv: string[]): Promise<void> {
 
   program
     .command("status")
+    .alias("ps")
+    .description("list rotations in flight; pass a rotation-id for details")
     .argument("[rotation-id]")
     .action((rotationId?: string) => {
       const started = Date.now();
@@ -686,6 +691,7 @@ export async function runCli(argv: string[]): Promise<void> {
 
   program
     .command("revoke")
+    .description("close a rotation: invalidate the old secret (after grace period)")
     .argument("<rotation-id>")
     .option("--force-revoke", "revoke even if consumers not synced")
     .action(async (rotationId: string, opts: { forceRevoke?: boolean }) => {
@@ -759,6 +765,7 @@ export async function runCli(argv: string[]): Promise<void> {
 
   program
     .command("incident")
+    .description("run an incident response: rotate everything matching the scope")
     .argument("<file>", "incident YAML file")
     .option("--max-rotations <n>", "hard cap", (v) => Number.parseInt(v, 10))
     .option("--dry-run", "print the plan without rotating anything")
