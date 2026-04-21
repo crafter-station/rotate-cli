@@ -97,3 +97,119 @@ describe("adapter-resend.revoke", () => {
     expect(r.ok).toBe(true);
   });
 });
+
+describe("adapter-resend.ownedBy", () => {
+  test("returns self when candidate domains match preload", async () => {
+    mockFetch(
+      () =>
+        new Response(
+          JSON.stringify({
+            data: [{ id: "domain_1", name: "example.com" }],
+          }),
+          { status: 200 },
+        ),
+    );
+
+    const result = await resendAdapter.ownedBy?.("re_candidate", mockCtx, {
+      preload: { knownDomainIds: ["domain_1"], knownDomainNames: ["example.com"] },
+    });
+
+    expect(result?.verdict).toBe("self");
+    expect(result?.confidence).toBe("medium");
+    expect(result?.strategy).toBe("list-match");
+    expect(calls[0]?.url).toMatch(/\/domains$/);
+    expect((calls[0]?.init?.headers as Record<string, string>)?.Authorization).toBe(
+      "Bearer re_candidate",
+    );
+  });
+
+  test("returns other when candidate domains are disjoint from preload", async () => {
+    mockFetch(
+      () =>
+        new Response(
+          JSON.stringify({
+            data: [{ id: "domain_other", name: "elsewhere.com" }],
+          }),
+          { status: 200 },
+        ),
+    );
+
+    const result = await resendAdapter.ownedBy?.("re_candidate", mockCtx, {
+      preload: { knownDomainIds: ["domain_1"], knownDomainNames: ["example.com"] },
+    });
+
+    expect(result?.verdict).toBe("other");
+    expect(result?.adminCanBill).toBe(false);
+    expect(result?.strategy).toBe("list-match");
+  });
+
+  test("returns unknown on 401", async () => {
+    mockFetch(() => new Response("unauthorized", { status: 401 }));
+
+    const result = await resendAdapter.ownedBy?.("re_candidate", mockCtx, {
+      preload: { knownDomainIds: ["domain_1"], knownDomainNames: ["example.com"] },
+    });
+
+    expect(result?.verdict).toBe("unknown");
+    expect(result?.adminCanBill).toBe(false);
+    expect(result?.strategy).toBe("list-match");
+  });
+
+  test("returns unknown on network error", async () => {
+    mockFetch(() => {
+      throw new Error("boom");
+    });
+
+    const result = await resendAdapter.ownedBy?.("re_candidate", mockCtx, {
+      preload: { knownDomainIds: ["domain_1"], knownDomainNames: ["example.com"] },
+    });
+
+    expect(result?.verdict).toBe("unknown");
+    expect(result?.evidence).toContain("network error");
+  });
+
+  test("uses sibling inheritance for send-only keys", async () => {
+    mockFetch(() => new Response("forbidden", { status: 403 }));
+
+    const result = await resendAdapter.ownedBy?.("re_candidate", mockCtx, {
+      preload: {
+        knownDomainIds: ["domain_1"],
+        knownDomainNames: ["example.com"],
+        vercelSiblingOwnership: "self",
+      },
+    });
+
+    expect(result?.verdict).toBe("self");
+    expect(result?.adminCanBill).toBe(true);
+    expect(result?.confidence).toBe("low");
+    expect(result?.strategy).toBe("sibling-inheritance");
+  });
+});
+
+describe("adapter-resend.preloadOwnership", () => {
+  test("builds the expected domain fingerprint", async () => {
+    mockFetch(
+      () =>
+        new Response(
+          JSON.stringify({
+            data: [
+              { id: "domain_1", name: "example.com" },
+              { id: "domain_2", name: "mail.example.com" },
+            ],
+          }),
+          { status: 200 },
+        ),
+    );
+
+    const preload = await resendAdapter.preloadOwnership?.(mockCtx);
+
+    expect(preload).toEqual({
+      knownDomainIds: ["domain_1", "domain_2"],
+      knownDomainNames: ["example.com", "mail.example.com"],
+    });
+    expect(calls[0]?.url).toMatch(/\/domains$/);
+    expect((calls[0]?.init?.headers as Record<string, string>)?.Authorization).toBe(
+      "Bearer re_old",
+    );
+  });
+});

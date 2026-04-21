@@ -19,6 +19,19 @@ export RESEND_API_KEY="re_xxxxxxxxx"
 
 The key used for rotation must be able to create, list, and delete API keys.
 
+## Ownership detection
+
+`ownedBy()` uses Resend's domain list as a team fingerprint because Resend API keys do not expose a parseable tenant marker and `GET /api-keys` does not return token fragments.
+
+`preloadOwnership()` calls `GET /domains` with the admin key and caches the admin team's domain IDs. For each candidate `re_...` key, `ownedBy()` calls `GET /domains` with the candidate key:
+
+- if every returned domain ID is in the admin fingerprint, the verdict is `self`
+- if no returned domain IDs are in the admin fingerprint, the verdict is `other`
+- if the candidate key cannot list domains, is revoked, is rate limited, or the provider is unavailable, the verdict is `unknown`
+- if a send-only key returns `403`, ownership can fall back to sibling env-var inference when the caller provides that signal
+
+The primary strategy is `list-match` with `medium` confidence. Sibling inference uses `low` confidence because Resend send-only keys cannot be verified through a read-only ownership endpoint.
+
 ## Config Example
 
 ```yaml

@@ -2,12 +2,16 @@ import { makeError } from "@rotate/core";
 import type {
   Adapter,
   AuthContext,
+  OwnershipOptions,
+  OwnershipPreload,
+  OwnershipResult,
   RotationResult,
   RotationSpec,
   Secret,
 } from "@rotate/core/types";
 
 const RESEND_API_KEYS_BASE = process.env.RESEND_API_KEYS_URL ?? "https://api.resend.com/api-keys";
+const RESEND_DOMAINS_BASE = process.env.RESEND_DOMAINS_URL ?? "https://api.resend.com/domains";
 const RESEND_PROVIDER = "resend";
 
 interface ResendCreateApiKeyResponse {
@@ -24,6 +28,15 @@ interface ResendApiKeyEntry {
 
 interface ResendListApiKeysResponse {
   data?: ResendApiKeyEntry[];
+}
+
+interface ResendDomainEntry {
+  id?: string;
+  name?: string;
+}
+
+interface ResendListDomainsResponse {
+  data?: ResendDomainEntry[];
 }
 
 export const resendAdapter: Adapter = {
@@ -140,6 +153,121 @@ export const resendAdapter: Adapter = {
       }),
     };
   },
+
+  async preloadOwnership(ctx: AuthContext): Promise<OwnershipPreload> {
+    const res = await request(RESEND_DOMAINS_BASE, {
+      headers: authHeaders(ctx.token),
+    });
+    if (res instanceof Error) {
+      return ownershipPreload([], [], "network_error");
+    }
+    if (res.status === 401 || res.status === 403) {
+      throw fromResponse(res, "preload ownership");
+    }
+    if (res.status === 429) {
+      return ownershipPreload([], [], "rate_limited");
+    }
+    if (res.status >= 500) {
+      return ownershipPreload([], [], "provider_unavailable");
+    }
+    if (!res.ok) {
+      return ownershipPreload([], [], "provider_error");
+    }
+
+    try {
+      const body = (await res.json()) as ResendListDomainsResponse;
+      return ownershipPreload(domainIds(body), domainNames(body));
+    } catch {
+      return ownershipPreload([], [], "malformed_response");
+    }
+  },
+
+  async ownedBy(
+    secretValue: string,
+    _ctx: AuthContext,
+    opts?: OwnershipOptions,
+  ): Promise<OwnershipResult> {
+    const sibling = siblingOwnership(opts);
+    const knownDomainIds = knownDomainIdSet(opts?.preload);
+
+    const res = await request(RESEND_DOMAINS_BASE, {
+      headers: authHeaders(secretValue),
+    });
+    if (res instanceof Error) {
+      return unknownOwnership("network error while reading Resend domains");
+    }
+    if (res.status === 401) {
+      return unknownOwnership("candidate key cannot read Resend domains");
+    }
+    if (res.status === 403) {
+      return sibling
+        ? siblingOwnershipResult(
+            sibling,
+            "candidate key is send-only; ownership inferred from sibling env vars",
+          )
+        : unknownOwnership("candidate key is send-only and cannot read Resend domains");
+    }
+    if (res.status === 429) {
+      return unknownOwnership("Resend rate limited the ownership check");
+    }
+    if (res.status >= 500) {
+      return unknownOwnership("provider unavailable");
+    }
+    if (!res.ok) {
+      return unknownOwnership(`Resend domains endpoint returned ${res.status}`);
+    }
+
+    let body: ResendListDomainsResponse;
+    try {
+      body = (await res.json()) as ResendListDomainsResponse;
+    } catch {
+      return unknownOwnership("Resend domains response was malformed");
+    }
+
+    const candidateDomainIds = domainIds(body);
+    if (candidateDomainIds.length === 0) {
+      return sibling
+        ? siblingOwnershipResult(
+            sibling,
+            "candidate key has no domain fingerprint; ownership inferred from sibling env vars",
+          )
+        : unknownOwnership("candidate key has no Resend domain fingerprint");
+    }
+    if (knownDomainIds.size === 0) {
+      return sibling
+        ? siblingOwnershipResult(
+            sibling,
+            "admin domain fingerprint unavailable; ownership inferred from sibling env vars",
+          )
+        : unknownOwnership("admin Resend domain fingerprint unavailable");
+    }
+
+    const allKnown = candidateDomainIds.every((id) => knownDomainIds.has(id));
+    if (allKnown) {
+      return {
+        verdict: "self",
+        adminCanBill: true,
+        scope: "team",
+        confidence: "medium",
+        evidence: `candidate Resend domains all match the admin fingerprint (${candidateDomainIds.length} domain${candidateDomainIds.length === 1 ? "" : "s"})`,
+        strategy: "list-match",
+      };
+    }
+
+    const someKnown = candidateDomainIds.some((id) => knownDomainIds.has(id));
+    if (someKnown) {
+      return unknownOwnership("candidate Resend domains partially overlap the admin fingerprint");
+    }
+
+    return {
+      verdict: "other",
+      adminCanBill: false,
+      scope: "team",
+      confidence: "medium",
+      evidence: "candidate Resend domains do not match the admin fingerprint",
+      strategy: "list-match",
+    };
+  },
 };
 
 export default resendAdapter;
@@ -169,6 +297,61 @@ function metadataFor(input: Record<string, string | undefined>): Record<string, 
   return Object.fromEntries(
     Object.entries(input).filter((entry): entry is [string, string] => Boolean(entry[1])),
   );
+}
+
+function ownershipPreload(
+  knownDomainIds: string[],
+  knownDomainNames: string[],
+  error?: string,
+): OwnershipPreload {
+  return {
+    knownDomainIds,
+    knownDomainNames,
+    ...(error ? { error } : {}),
+  };
+}
+
+function knownDomainIdSet(preload?: OwnershipPreload): Set<string> {
+  const value = preload?.knownDomainIds;
+  if (value instanceof Set)
+    return new Set([...value].filter((id): id is string => typeof id === "string"));
+  if (!Array.isArray(value)) return new Set();
+  return new Set(value.filter((id): id is string => typeof id === "string"));
+}
+
+function domainIds(body: ResendListDomainsResponse): string[] {
+  return (body.data ?? []).flatMap((domain) => (domain.id ? [domain.id] : []));
+}
+
+function domainNames(body: ResendListDomainsResponse): string[] {
+  return (body.data ?? []).flatMap((domain) => (domain.name ? [domain.name] : []));
+}
+
+function siblingOwnership(opts?: OwnershipOptions): "self" | "other" | undefined {
+  const value = opts?.preload?.vercelSiblingOwnership ?? opts?.preload?.siblingOwnership;
+  return value === "self" || value === "other" ? value : undefined;
+}
+
+function siblingOwnershipResult(verdict: "self" | "other", evidence: string): OwnershipResult {
+  return {
+    verdict,
+    adminCanBill: verdict === "self",
+    scope: "team",
+    confidence: "low",
+    evidence,
+    strategy: "sibling-inheritance",
+  };
+}
+
+function unknownOwnership(evidence: string): OwnershipResult {
+  return {
+    verdict: "unknown",
+    adminCanBill: false,
+    scope: "team",
+    confidence: "low",
+    evidence,
+    strategy: "list-match",
+  };
 }
 
 function networkError(cause: Error) {
