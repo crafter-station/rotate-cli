@@ -23,7 +23,7 @@ import { emit, makeEnvelope } from "./envelope.ts";
 import { EXIT, RotateError } from "./errors.ts";
 import { applyRotation, preloadOwnershipForSecrets, revokeRotation } from "./orchestrator.ts";
 import { createPromptIO } from "./prompt.ts";
-import { listAdapters, listConsumers } from "./registry.ts";
+import { getAdapter, listAdapters, listConsumers } from "./registry.ts";
 import type { PromptChoice, PromptIO } from "./types.ts";
 
 export async function runCli(argv: string[]): Promise<void> {
@@ -439,6 +439,144 @@ export async function runCli(argv: string[]): Promise<void> {
         );
       },
     );
+
+  program
+    .command("preview-ownership")
+    .description("check which secrets you own without rotating anything")
+    .argument("[selector...]", "secret identifiers (optional with --provider/--tag)")
+    .option("--provider <name>")
+    .option("--tag <name>")
+    .action(async (idsArg: string[] | undefined, opts: { provider?: string; tag?: string }) => {
+      const ids = idsArg ?? [];
+      const started = Date.now();
+      const globalOpts = program.opts();
+      const config = loadConfig(globalOpts.config);
+      const selected = selectByQuery(config, { ids, provider: opts.provider, tag: opts.tag });
+      if (!selected.length) {
+        emit(
+          makeEnvelope({
+            command: "preview-ownership",
+            status: "error",
+            startedAt: started,
+            agentMode: isAgentMode(),
+            errors: [
+              {
+                code: "invalid_spec",
+                message: "selector matched no secrets",
+                provider: "rotate-cli",
+                retryable: false,
+              },
+            ],
+          }),
+          EXIT.USER_ERROR,
+        );
+        return;
+      }
+      const { map: preloadMap, errors: preloadErrors } = await preloadOwnershipForSecrets(selected);
+      const checks = await Promise.all(
+        selected.map(async (secret) => {
+          const adapter = getAdapter(secret.adapter);
+          if (!adapter?.ownedBy) {
+            return {
+              secret_id: secret.id,
+              adapter: secret.adapter,
+              verdict: null,
+              reason: "adapter has no ownedBy() method",
+            };
+          }
+          const {
+            value: currentValue,
+            source,
+            error: resolveError,
+          } = await resolveCurrentValue(secret);
+          if (!currentValue) {
+            return {
+              secret_id: secret.id,
+              adapter: secret.adapter,
+              verdict: "unknown" as const,
+              reason:
+                resolveError ??
+                (source === "unavailable"
+                  ? "current value unavailable (set currentValueEnv or use vercel-env consumer)"
+                  : "current value empty"),
+            };
+          }
+          try {
+            const ctx = await adapter.auth();
+            const ownership = await adapter.ownedBy(currentValue, ctx, {
+              preload: preloadMap.get(secret.adapter),
+            });
+            return {
+              secret_id: secret.id,
+              adapter: secret.adapter,
+              verdict: ownership.verdict,
+              admin_can_bill: ownership.adminCanBill,
+              scope: ownership.scope,
+              confidence: ownership.confidence,
+              strategy: ownership.strategy,
+              evidence: ownership.evidence,
+            };
+          } catch (cause) {
+            return {
+              secret_id: secret.id,
+              adapter: secret.adapter,
+              verdict: "unknown" as const,
+              reason: String(cause),
+            };
+          }
+        }),
+      );
+
+      const summary = checks.reduce(
+        (acc, c) => {
+          if (c.verdict === "self") acc.self++;
+          else if (c.verdict === "other") acc.other++;
+          else if (c.verdict === "unknown") acc.unknown++;
+          else acc.not_checked++;
+          return acc;
+        },
+        { self: 0, other: 0, unknown: 0, not_checked: 0 },
+      );
+
+      const nextActions = [];
+      if (summary.self > 0) {
+        nextActions.push(
+          `${summary.self} secret(s) ready to rotate — run \`rotate apply\` with matching selector`,
+        );
+      }
+      if (summary.other > 0) {
+        nextActions.push(
+          `${summary.other} secret(s) belong to another account — coordinate with the owner or use --force-rotate-other`,
+        );
+      }
+      if (summary.unknown > 0) {
+        nextActions.push(
+          `${summary.unknown} secret(s) have unknown ownership — add currentValueEnv hints to rotate.config.yaml`,
+        );
+      }
+      if (preloadErrors.size > 0) {
+        nextActions.push(
+          `preload failed for: ${[...preloadErrors.keys()].join(", ")} — check auth with \`rotate doctor\``,
+        );
+      }
+
+      emit(
+        makeEnvelope({
+          command: "preview-ownership",
+          status: "success",
+          startedAt: started,
+          agentMode: isAgentMode(),
+          data: {
+            total: checks.length,
+            checks,
+            summary,
+            preload_errors: Object.fromEntries(preloadErrors),
+          },
+          next_actions: nextActions,
+        }),
+        EXIT.OK,
+      );
+    });
 
   program
     .command("status")
