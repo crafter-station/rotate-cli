@@ -6,6 +6,7 @@
     ".": "./src/index.ts",
     "./types": "./src/types.ts",
     "./auth": "./src/auth.ts",
+    "./auth-render": "./src/auth-render.ts",
     "./auth-store": "./src/auth-store.ts",
     "./envelope": "./src/envelope.ts",
     "./registry": "./src/registry.ts",

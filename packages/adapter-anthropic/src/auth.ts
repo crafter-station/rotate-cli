@@ -22,7 +22,7 @@ export const anthropicAuthDefinition: AuthDefinition = {
       steps: [
         {
           kind: "note",
-          message: `${"Anthropic admin keys:"} ${"https://platform.claude.com/settings/admin-keys"}\nCreate an admin key, then paste it below.`,
+          message: `Anthropic admin keys: https://platform.claude.com/settings/admin-keys\nCreate an admin key, then paste it below.`,
         },
         {
           kind: "password",

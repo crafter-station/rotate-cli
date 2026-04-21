@@ -17,7 +17,9 @@ export class ClackPromptIO implements PromptIO {
   readonly isInteractive = true;
 
   note(message: string): void {
-    prompts.note(message);
+    for (const line of message.split("\n")) {
+      stderr.write(`${line}\n`);
+    }
   }
 
   async promptLine(message: string): Promise<string> {

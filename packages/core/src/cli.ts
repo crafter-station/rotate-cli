@@ -7,6 +7,11 @@ import {
   listAuthEntries,
   logoutRegisteredAuth,
 } from "./auth.ts";
+import {
+  renderAuthList,
+  renderAuthLoginSuccess,
+  renderAuthLogoutResult,
+} from "./auth-render.ts";
 import { runAuthLoginFlow } from "./auth-flow.ts";
 import { createPromptIO } from "./prompt.ts";
 import {
@@ -67,6 +72,10 @@ export async function runCli(argv: string[]): Promise<void> {
     .action(async () => {
       const started = Date.now();
       const entries = await listAuthEntries();
+      if (shouldRenderPretty(program)) {
+        renderAuthList(entries);
+        process.exit(EXIT.OK);
+      }
       emit(
         makeEnvelope({
           command: "auth:list",
@@ -116,6 +125,15 @@ export async function runCli(argv: string[]): Promise<void> {
         }
         const ctx = await runAuthLoginFlow(definition, io);
         const summary = buildAuthSummary(selectedProvider);
+        if (shouldRenderPretty(program)) {
+          renderAuthLoginSuccess({
+            displayName: summary.displayName,
+            source: ctx.kind === "env" ? "env" : "stored",
+            envVars: summary.envVars,
+            setupUrl: summary.setupUrl,
+          });
+          process.exit(EXIT.OK);
+        }
         emit(
           makeEnvelope({
             command: "auth:login",
@@ -170,6 +188,15 @@ export async function runCli(argv: string[]): Promise<void> {
       }
       const removed = await logoutRegisteredAuth(provider);
       const envStillConfigured = definition.envVars.some((name) => Boolean(process.env[name]));
+      if (shouldRenderPretty(program)) {
+        renderAuthLogoutResult({
+          displayName: definition.displayName,
+          removed,
+          envStillConfigured,
+          envVars: definition.envVars,
+        });
+        process.exit(EXIT.OK);
+      }
       emit(
         makeEnvelope({
           command: "auth:logout",
@@ -627,6 +654,13 @@ async function promptForAuthProvider(io: PromptIO): Promise<string> {
     hint: definition.notes?.[0],
   }));
   return io.select("Select provider", choices);
+}
+
+function shouldRenderPretty(program: Command): boolean {
+  const opts = program.opts<{ json?: boolean; pretty?: boolean }>();
+  if (opts.json) return false;
+  if (opts.pretty) return true;
+  return true;
 }
 
 // Convenience helper for audit-log append from tests.

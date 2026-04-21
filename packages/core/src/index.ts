@@ -6,6 +6,7 @@ export * from "./checkpoints.ts";
 export * from "./orchestrator.ts";
 export * from "./agent-mode.ts";
 export * from "./auth.ts";
+export * from "./auth-render.ts";
 export * from "./auth-store.ts";
 export * from "./registry.ts";
 export * from "./auth-flow.ts";

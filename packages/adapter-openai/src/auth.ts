@@ -21,7 +21,7 @@ export const openaiAuthDefinition: AuthDefinition = {
       steps: [
         {
           kind: "note",
-          message: `${"OpenAI admin keys:"} ${"https://platform.openai.com/settings/organization/admin-keys"}\nCreate an admin key, then paste it below.`,
+          message: `OpenAI admin keys: https://platform.openai.com/settings/organization/admin-keys\nCreate an admin key, then paste it below.`,
         },
         {
           kind: "password",
