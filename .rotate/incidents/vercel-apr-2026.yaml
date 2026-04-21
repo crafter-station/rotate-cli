@@ -1,0 +1,34 @@
+# Vercel April 2026 Security Incident
+#
+# Scope: every non-sensitive env var across the Vercel workspaces touched by
+# the Context.ai OAuth compromise disclosed 2026-04-19. Any variable flagged
+# with tag `non-sensitive` in rotate.config.yaml is in scope.
+#
+# Reference: https://vercel.com/kb/bulletin/vercel-april-2026-security-incident
+
+version: 1
+id: vercel-apr-2026
+published: 2026-04-19
+reference: https://vercel.com/kb/bulletin/vercel-april-2026-security-incident
+severity: high
+
+scope:
+  - provider: clerk
+    filter:
+      tag: non-sensitive
+
+  - provider: openai
+    filter:
+      tag: non-sensitive
+
+  - provider: anthropic
+    filter:
+      tag: non-sensitive
+
+  - provider: resend
+    filter:
+      tag: non-sensitive
+
+  - provider: supabase
+    filter:
+      tag: non-sensitive
