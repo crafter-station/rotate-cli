@@ -102,3 +102,100 @@ describe("adapter-clerk.revoke", () => {
     expect(r.ok).toBe(true);
   });
 });
+
+describe("adapter-clerk.ownedBy", () => {
+  test("returns self when co-located publishable key decodes to a known FAPI host", async () => {
+    const pk = publishableKey("test", "example.accounts.dev");
+    const result = await clerkAdapter.ownedBy?.("sk_test_candidate", mockCtx, {
+      coLocatedVars: { NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: pk },
+      preload: { knownFapiHosts: ["example.accounts.dev"] },
+    });
+
+    expect(result?.verdict).toBe("self");
+    expect(result?.adminCanBill).toBe(true);
+    expect(result?.confidence).toBe("high");
+    expect(result?.strategy).toBe("format-decode");
+    expect(calls.length).toBe(0);
+  });
+
+  test("returns other when co-located publishable key decodes to an unknown FAPI host", async () => {
+    const pk = publishableKey("live", "foreign.accounts.dev");
+    const result = await clerkAdapter.ownedBy?.("sk_live_candidate", mockCtx, {
+      coLocatedVars: { NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: pk },
+      preload: { knownFapiHosts: ["example.accounts.dev"] },
+    });
+
+    expect(result?.verdict).toBe("other");
+    expect(result?.adminCanBill).toBe(false);
+    expect(result?.confidence).toBe("high");
+    expect(result?.strategy).toBe("format-decode");
+    expect(calls.length).toBe(0);
+  });
+
+  test("uses JWKS fallback when no publishable key is available", async () => {
+    mockFetch(
+      () =>
+        new Response(JSON.stringify({ keys: [{ kid: "ins_known_abc" }] }), {
+          status: 200,
+        }),
+    );
+
+    const result = await clerkAdapter.ownedBy?.("sk_live_candidate", mockCtx, {
+      preload: { knownKids: ["ins_known_abc"] },
+    });
+
+    expect(result?.verdict).toBe("self");
+    expect(result?.strategy).toBe("api-introspection");
+    expect(calls[0]?.url).toMatch(/\/v1\/jwks$/);
+    expect((calls[0]?.init?.headers as Record<string, string>)?.Authorization).toBe(
+      "Bearer sk_live_candidate",
+    );
+  });
+
+  test("returns unknown on JWKS 401", async () => {
+    mockFetch(() => new Response("unauthorized", { status: 401 }));
+
+    const result = await clerkAdapter.ownedBy?.("sk_live_candidate", mockCtx, {
+      preload: { knownKids: ["ins_known_abc"] },
+    });
+
+    expect(result?.verdict).toBe("unknown");
+    expect(result?.adminCanBill).toBe(false);
+    expect(result?.strategy).toBe("api-introspection");
+  });
+
+  test("returns unknown on JWKS network error", async () => {
+    mockFetch(() => {
+      throw new Error("socket closed");
+    });
+
+    const result = await clerkAdapter.ownedBy?.("sk_live_candidate", mockCtx, {
+      preload: { knownKids: ["ins_known_abc"] },
+    });
+
+    expect(result?.verdict).toBe("unknown");
+    expect(result?.evidence).toBe("provider unavailable");
+    expect(result?.strategy).toBe("api-introspection");
+  });
+
+  test("inherits webhook secret ownership from sibling Clerk secret", async () => {
+    const pk = publishableKey("test", "example.accounts.dev");
+    const result = await clerkAdapter.ownedBy?.("whsec_candidate", mockCtx, {
+      coLocatedVars: {
+        CLERK_SECRET_KEY: "sk_test_candidate",
+        NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: pk,
+      },
+      preload: { knownFapiHosts: ["example.accounts.dev"] },
+    });
+
+    expect(result?.verdict).toBe("self");
+    expect(result?.adminCanBill).toBe(true);
+    expect(result?.confidence).toBe("medium");
+    expect(result?.strategy).toBe("sibling-inheritance");
+    expect(calls.length).toBe(0);
+  });
+});
+
+function publishableKey(environment: "live" | "test", host: string): string {
+  return `pk_${environment}_${Buffer.from(`${host}$`, "utf8").toString("base64")}`;
+}

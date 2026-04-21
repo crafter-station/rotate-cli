@@ -19,12 +19,21 @@ import { makeError } from "@rotate/core";
 import type {
   Adapter,
   AuthContext,
+  OwnershipOptions,
+  OwnershipResult,
   RotationResult,
   RotationSpec,
   Secret,
 } from "@rotate/core/types";
 
 const PLAPI_BASE = process.env.CLERK_PLAPI_URL ?? "https://api.clerk.com";
+
+const PUBLISHABLE_KEY_NAMES = [
+  "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY",
+  "CLERK_PUBLISHABLE_KEY",
+  "VITE_CLERK_PUBLISHABLE_KEY",
+  "NUXT_PUBLIC_CLERK_PUBLISHABLE_KEY",
+];
 
 export interface ClerkApiKey {
   id: string;
@@ -133,6 +142,158 @@ export const clerkAdapter: Adapter = {
       })),
     };
   },
+
+  async ownedBy(
+    secretValue: string,
+    _ctx: AuthContext,
+    opts?: OwnershipOptions,
+  ): Promise<OwnershipResult> {
+    const secret = cleanValue(secretValue);
+
+    if (secret.startsWith("whsec_")) {
+      const sibling = cleanValue(opts?.coLocatedVars?.CLERK_SECRET_KEY);
+      if (!sibling || sibling === secret) {
+        return unknownOwnership(
+          "webhook secret has no owner-identifying content and no sibling Clerk secret was provided",
+          "sibling-inheritance",
+        );
+      }
+
+      const inherited = await clerkAdapter.ownedBy?.(sibling, _ctx, opts);
+      if (!inherited || inherited.verdict === "unknown") {
+        return unknownOwnership(
+          "webhook secret has no owner-identifying content and sibling Clerk secret ownership is unknown",
+          "sibling-inheritance",
+        );
+      }
+
+      return {
+        verdict: inherited.verdict,
+        adminCanBill: inherited.adminCanBill,
+        scope: inherited.scope,
+        teamRole: inherited.teamRole,
+        confidence: inherited.verdict === "self" ? "medium" : inherited.confidence,
+        evidence: `webhook secret inherits sibling Clerk secret ownership: ${inherited.evidence}`,
+        strategy: "sibling-inheritance",
+      };
+    }
+
+    const publishableKey = findPublishableKey(secret, opts?.coLocatedVars);
+    if (publishableKey) {
+      const decoded = decodeFapi(publishableKey);
+      if (!decoded) {
+        return unknownOwnership("co-located Clerk publishable key could not be decoded");
+      }
+
+      const secretEnv = clerkKeyEnvironment(secret);
+      if (secretEnv && decoded.environment !== secretEnv) {
+        return {
+          verdict: "unknown",
+          adminCanBill: false,
+          scope: "project",
+          confidence: "medium",
+          evidence: "Clerk secret key environment does not match co-located publishable key",
+          strategy: "format-decode",
+        };
+      }
+
+      const knownHosts = stringSetFromPreload(opts?.preload, [
+        "knownFapiHosts",
+        "clerkKnownFapiHosts",
+        "fapiHosts",
+      ]);
+
+      if (knownHosts.size === 0) {
+        return unknownOwnership("no known Clerk FAPI host fingerprints available");
+      }
+
+      if (knownHosts.has(decoded.host)) {
+        return {
+          verdict: "self",
+          adminCanBill: true,
+          scope: "project",
+          confidence: "high",
+          evidence: `decoded Clerk publishable key host matches known FAPI host ${decoded.host}`,
+          strategy: "format-decode",
+        };
+      }
+
+      return {
+        verdict: "other",
+        adminCanBill: false,
+        scope: "project",
+        confidence: "high",
+        evidence: `decoded Clerk publishable key host ${decoded.host} is not in known FAPI hosts`,
+        strategy: "format-decode",
+      };
+    }
+
+    if (!secret.startsWith("sk_")) {
+      return unknownOwnership("secret is not a Clerk secret key or webhook secret");
+    }
+
+    const knownKids = stringSetFromPreload(opts?.preload, ["knownKids", "clerkKnownKids"]);
+    if (knownKids.size === 0) {
+      return unknownOwnership(
+        "no Clerk publishable key sibling or known JWKS key fingerprints available",
+      );
+    }
+
+    try {
+      const res = await fetch(`${PLAPI_BASE}/v1/jwks`, {
+        headers: { Authorization: `Bearer ${secret}` },
+      });
+
+      if (res.status === 401 || res.status === 403) {
+        return unknownOwnership("Clerk JWKS introspection was not authorized", "api-introspection");
+      }
+      if (res.status === 429) {
+        return unknownOwnership("Clerk ownership check was rate limited", "api-introspection");
+      }
+      if (res.status >= 500) {
+        return unknownOwnership("provider unavailable", "api-introspection");
+      }
+      if (!res.ok) {
+        return unknownOwnership(
+          `Clerk JWKS introspection returned ${res.status}`,
+          "api-introspection",
+        );
+      }
+
+      const jwks = (await res.json()) as { keys?: Array<{ kid?: string }> };
+      const kids = (jwks.keys ?? [])
+        .map((key) => key.kid)
+        .filter((kid): kid is string => Boolean(kid));
+      if (kids.length === 0) {
+        return unknownOwnership(
+          "Clerk JWKS response did not include key fingerprints",
+          "api-introspection",
+        );
+      }
+
+      if (kids.some((kid) => knownKids.has(kid))) {
+        return {
+          verdict: "self",
+          adminCanBill: true,
+          scope: "project",
+          confidence: "medium",
+          evidence: "Clerk JWKS key fingerprint matches known instance fingerprint",
+          strategy: "api-introspection",
+        };
+      }
+
+      return {
+        verdict: "other",
+        adminCanBill: false,
+        scope: "project",
+        confidence: "medium",
+        evidence: "Clerk JWKS key fingerprints do not match known instance fingerprints",
+        strategy: "api-introspection",
+      };
+    } catch {
+      return unknownOwnership("provider unavailable", "api-introspection");
+    }
+  },
 };
 
 export default clerkAdapter;
@@ -156,4 +317,79 @@ function fromResponse(res: Response, op: string) {
   return makeError("provider_error", `clerk ${op}: ${res.status}`, "clerk", {
     retryable: false,
   });
+}
+
+function findPublishableKey(
+  secretValue: string,
+  coLocatedVars: Record<string, string> | undefined,
+): string | undefined {
+  if (secretValue.startsWith("pk_")) return secretValue;
+  for (const name of PUBLISHABLE_KEY_NAMES) {
+    const value = cleanValue(coLocatedVars?.[name]);
+    if (value.startsWith("pk_")) return value;
+  }
+  return undefined;
+}
+
+function decodeFapi(pk: string): { host: string; environment: "live" | "test" } | undefined {
+  const match = cleanValue(pk).match(/^pk_(live|test)_(.+)$/);
+  if (!match) return undefined;
+  const [, environment, encoded] = match as [string, "live" | "test", string];
+
+  try {
+    const body = encoded.replace(/-/g, "+").replace(/_/g, "/");
+    const decoded = Buffer.from(body, "base64").toString("utf8");
+    const host = decoded.replace(/\$$/, "").toLowerCase();
+    if (!host || host.includes("/") || /\s/.test(host)) return undefined;
+    return { host, environment };
+  } catch {
+    return undefined;
+  }
+}
+
+function clerkKeyEnvironment(value: string): "live" | "test" | undefined {
+  const match = cleanValue(value).match(/^(?:sk|pk)_(live|test)_/);
+  return match?.[1] as "live" | "test" | undefined;
+}
+
+function stringSetFromPreload(
+  preload: Record<string, unknown> | undefined,
+  keys: string[],
+): Set<string> {
+  const values = new Set<string>();
+  for (const key of keys) {
+    const value = preload?.[key];
+    if (value instanceof Set) {
+      for (const item of value) {
+        if (typeof item === "string") values.add(item.toLowerCase());
+      }
+    } else if (Array.isArray(value)) {
+      for (const item of value) {
+        if (typeof item === "string") values.add(item.toLowerCase());
+      }
+    }
+  }
+  return values;
+}
+
+function cleanValue(value: string | undefined): string {
+  const trimmed = (value ?? "").trim();
+  const quote = trimmed[0];
+  if ((quote === '"' || quote === "'") && trimmed.endsWith(quote)) {
+    return trimmed.slice(1, -1).trim();
+  }
+  return trimmed;
+}
+
+function unknownOwnership(
+  evidence: string,
+  strategy: OwnershipResult["strategy"] = "format-decode",
+): OwnershipResult {
+  return {
+    verdict: "unknown",
+    adminCanBill: false,
+    confidence: "low",
+    evidence,
+    strategy,
+  };
 }
