@@ -107,3 +107,105 @@ describe("adapter-supabase.revoke", () => {
     expect(r.ok).toBe(true);
   });
 });
+
+describe("adapter-supabase.ownedBy", () => {
+  test("returns self for co-located Supabase URL", async () => {
+    mockFetch(() =>
+      Response.json([{ id: "abcdefghijklmnopqrst" }, { id: "uvwxyzabcdef12345678" }]),
+    );
+
+    const result = await supabaseAdapter.ownedBy?.("sb_secret_unused", mockCtx, {
+      coLocatedVars: {
+        SUPABASE_URL: "https://abcdefghijklmnopqrst.supabase.co",
+      },
+    });
+
+    expect(result?.verdict).toBe("self");
+    expect(result?.adminCanBill).toBe(true);
+    expect(result?.confidence).toBe("high");
+    expect(result?.strategy).toBe("sibling-inheritance");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.url).toBe("https://api.supabase.com/v1/projects");
+  });
+
+  test("returns other for legacy JWT from a different project", async () => {
+    mockFetch(() => Response.json([{ id: "abcdefghijklmnopqrst" }]));
+
+    const result = await supabaseAdapter.ownedBy?.(
+      jwt({ iss: "supabase", ref: "uvwxyzabcdef12345678", role: "service_role" }),
+      mockCtx,
+    );
+
+    expect(result?.verdict).toBe("other");
+    expect(result?.adminCanBill).toBe(false);
+    expect(result?.confidence).toBe("high");
+    expect(result?.strategy).toBe("format-decode");
+  });
+
+  test("returns self for opaque key matched by API introspection", async () => {
+    mockFetch((url) => {
+      if (url.endsWith("/v1/projects")) {
+        return Response.json([{ id: "abcdefghijklmnopqrst" }]);
+      }
+      if (url.endsWith("/v1/projects/abcdefghijklmnopqrst/api-keys?reveal=true")) {
+        return Response.json([
+          {
+            id: "secret-key",
+            api_key: "sb_secret_match",
+          },
+        ]);
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    const result = await supabaseAdapter.ownedBy?.("sb_secret_match", mockCtx);
+
+    expect(result?.verdict).toBe("self");
+    expect(result?.adminCanBill).toBe(true);
+    expect(result?.confidence).toBe("medium");
+    expect(result?.strategy).toBe("api-introspection");
+    expect(calls).toHaveLength(2);
+  });
+
+  test("returns unknown on 401", async () => {
+    mockFetch(() => new Response("unauthorized", { status: 401 }));
+
+    const result = await supabaseAdapter.ownedBy?.(
+      jwt({ iss: "supabase", ref: "abcdefghijklmnopqrst", role: "anon" }),
+      mockCtx,
+    );
+
+    expect(result?.verdict).toBe("unknown");
+    expect(result?.adminCanBill).toBe(false);
+    expect(result?.confidence).toBe("low");
+    expect(result?.strategy).toBe("format-decode");
+  });
+
+  test("returns unknown on network error", async () => {
+    mockFetch(() => {
+      throw new Error("offline");
+    });
+
+    const result = await supabaseAdapter.ownedBy?.(
+      jwt({ iss: "supabase", ref: "abcdefghijklmnopqrst", role: "anon" }),
+      mockCtx,
+    );
+
+    expect(result?.verdict).toBe("unknown");
+    expect(result?.adminCanBill).toBe(false);
+    expect(result?.confidence).toBe("low");
+    expect(result?.strategy).toBe("format-decode");
+  });
+});
+
+function jwt(payload: Record<string, unknown>): string {
+  return `${base64Url({ alg: "HS256", typ: "JWT" })}.${base64Url(payload)}.signature`;
+}
+
+function base64Url(value: Record<string, unknown>): string {
+  return Buffer.from(JSON.stringify(value), "utf8")
+    .toString("base64")
+    .replace(/=/g, "")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_");
+}

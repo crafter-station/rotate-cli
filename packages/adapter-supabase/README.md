@@ -24,6 +24,18 @@ export SUPABASE_ACCESS_TOKEN="sbp_..."
 
 The token must be allowed to manage API keys for the target project. Fine-grained tokens need API Gateway key read/write permissions.
 
+## Ownership detection
+
+`ownedBy()` uses Supabase project ownership signals without mutating provider state.
+
+When a co-located `SUPABASE_URL` or `NEXT_PUBLIC_SUPABASE_URL` is available, the adapter extracts the project ref from `https://{project_ref}.supabase.co` and checks whether that ref is visible to the authenticated Supabase personal access token. A match returns `self` with high confidence; a visible project list that does not include the ref returns `other`.
+
+Legacy Supabase anon and service role JWT keys are decoded locally without verifying the signature. If the payload has `iss: "supabase"` and a `ref` claim, the adapter checks that project ref against the authenticated admin's project list. This is a `format-decode` result with high confidence.
+
+New opaque `sb_publishable_*` and `sb_secret_*` keys do not embed a project ref. For those, the adapter lists projects through the Management API, fetches revealed API keys for each visible project, and compares SHA-256 hashes locally. A match returns `self` with medium confidence. A miss returns `unknown` because the key may belong to a project the admin cannot see.
+
+If Supabase returns `401`, `403`, `429`, a provider error, or the network request fails during ownership detection, the adapter returns `unknown` instead of aborting rotation.
+
 ## Config Example
 
 ```yaml

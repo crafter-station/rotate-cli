@@ -1,7 +1,10 @@
+import { createHash } from "node:crypto";
 import { makeError } from "@rotate/core";
 import type {
   Adapter,
   AuthContext,
+  OwnershipOptions,
+  OwnershipResult,
   RotationResult,
   RotationSpec,
   Secret,
@@ -21,6 +24,10 @@ interface SupabaseApiKey {
   hash?: string;
   inserted_at?: string;
   updated_at?: string;
+}
+
+interface SupabaseProject {
+  id?: string;
 }
 
 export const supabaseAdapter: Adapter = {
@@ -159,6 +166,34 @@ export const supabaseAdapter: Adapter = {
       })),
     };
   },
+
+  async ownedBy(
+    secretValue: string,
+    ctx: AuthContext,
+    opts?: OwnershipOptions,
+  ): Promise<OwnershipResult> {
+    const urlProjectRef = projectRefFromUrl(
+      opts?.coLocatedVars?.SUPABASE_URL ?? opts?.coLocatedVars?.NEXT_PUBLIC_SUPABASE_URL,
+    );
+    if (urlProjectRef) {
+      return ownedByProjectRef(urlProjectRef, ctx, opts, "sibling-inheritance");
+    }
+
+    const jwtPayload = decodeSupabaseJwt(secretValue);
+    if (jwtPayload?.iss === "supabase" && typeof jwtPayload.ref === "string") {
+      return ownedByProjectRef(jwtPayload.ref, ctx, opts, "format-decode");
+    }
+
+    if (isOpaqueSupabaseKey(secretValue)) {
+      return ownedByOpaqueKey(secretValue, ctx);
+    }
+
+    return unknownOwnership(
+      "secret format does not expose a Supabase project ref",
+      "prompt",
+      "low",
+    );
+  },
 };
 
 export default supabaseAdapter;
@@ -178,6 +213,185 @@ function compactMetadata(metadata: Record<string, string | undefined>): Record<s
   return Object.fromEntries(
     Object.entries(metadata).filter((entry): entry is [string, string] => entry[1] !== undefined),
   );
+}
+
+async function ownedByProjectRef(
+  projectRef: string,
+  ctx: AuthContext,
+  opts: OwnershipOptions | undefined,
+  strategy: "format-decode" | "sibling-inheritance",
+): Promise<OwnershipResult> {
+  const refs = projectRefsFromPreload(opts?.preload) ?? (await fetchProjectRefs(ctx));
+  if (!refs) {
+    return unknownOwnership("project list unavailable", strategy, "low");
+  }
+
+  if (refs.has(projectRef)) {
+    return {
+      verdict: "self",
+      adminCanBill: true,
+      scope: "project",
+      confidence: "high",
+      evidence: "Supabase project ref is visible to the authenticated admin",
+      strategy,
+    };
+  }
+
+  return {
+    verdict: "other",
+    adminCanBill: false,
+    scope: "project",
+    confidence: "high",
+    evidence: "Supabase project ref is not visible to the authenticated admin",
+    strategy,
+  };
+}
+
+async function ownedByOpaqueKey(secretValue: string, ctx: AuthContext): Promise<OwnershipResult> {
+  const keyIndex = await buildKeyIndex(ctx);
+  if (!keyIndex) {
+    return unknownOwnership("provider unavailable", "api-introspection", "low");
+  }
+
+  if (keyIndex.has(sha256(secretValue))) {
+    return {
+      verdict: "self",
+      adminCanBill: true,
+      scope: "project",
+      confidence: "medium",
+      evidence: "Supabase API key matched a project visible to the authenticated admin",
+      strategy: "api-introspection",
+    };
+  }
+
+  return {
+    verdict: "unknown",
+    adminCanBill: false,
+    scope: "project",
+    confidence: "medium",
+    evidence: "Supabase API key did not match any project visible to the authenticated admin",
+    strategy: "api-introspection",
+  };
+}
+
+async function fetchProjectRefs(ctx: AuthContext): Promise<Set<string> | undefined> {
+  const res = await safeFetch(`${SUPABASE_API_BASE}/v1/projects`, {
+    headers: authHeaders(ctx),
+  });
+  if (!res?.ok) {
+    if (res) fromResponse(res, "ownedBy");
+    return undefined;
+  }
+
+  const projects = (await res.json()) as SupabaseProject[];
+  return new Set(projects.map((project) => project.id).filter(isProjectRef));
+}
+
+async function buildKeyIndex(ctx: AuthContext): Promise<Map<string, string> | undefined> {
+  const refs = await fetchProjectRefs(ctx);
+  if (!refs) return undefined;
+
+  const index = new Map<string, string>();
+  for (const ref of refs) {
+    const res = await safeFetch(`${SUPABASE_API_BASE}/v1/projects/${ref}/api-keys?reveal=true`, {
+      headers: authHeaders(ctx),
+    });
+    if (!res?.ok) {
+      if (res) fromResponse(res, "ownedBy");
+      if (shouldAbortOwnershipIntrospection(res)) {
+        return undefined;
+      }
+      continue;
+    }
+
+    const body = (await res.json()) as unknown;
+    for (const key of extractApiKeyValues(body)) {
+      index.set(sha256(key), ref);
+    }
+  }
+
+  return index;
+}
+
+async function safeFetch(url: string, init: RequestInit): Promise<Response | undefined> {
+  try {
+    return await fetch(url, init);
+  } catch (cause) {
+    makeError("network_error", "supabase ownership network error", "supabase", { cause });
+    return undefined;
+  }
+}
+
+function projectRefsFromPreload(
+  preload: Record<string, unknown> | undefined,
+): Set<string> | undefined {
+  const refs = preload?.projectRefs;
+  if (!Array.isArray(refs)) return undefined;
+  return new Set(refs.filter(isProjectRef));
+}
+
+function decodeSupabaseJwt(secretValue: string): Record<string, unknown> | undefined {
+  if (!secretValue.startsWith("eyJ")) return undefined;
+  const payload = secretValue.split(".")[1];
+  if (!payload) return undefined;
+
+  try {
+    const padded = payload
+      .replace(/-/g, "+")
+      .replace(/_/g, "/")
+      .padEnd(Math.ceil(payload.length / 4) * 4, "=");
+    return JSON.parse(Buffer.from(padded, "base64").toString("utf8")) as Record<string, unknown>;
+  } catch {
+    return undefined;
+  }
+}
+
+function projectRefFromUrl(url: string | undefined): string | undefined {
+  const match = url?.match(/^https?:\/\/([a-z0-9]{20})\.supabase\.co(?:\/|$)/);
+  return match?.[1];
+}
+
+function isProjectRef(value: unknown): value is string {
+  return typeof value === "string" && /^[a-z0-9]{20}$/.test(value);
+}
+
+function isOpaqueSupabaseKey(secretValue: string): boolean {
+  return secretValue.startsWith("sb_publishable_") || secretValue.startsWith("sb_secret_");
+}
+
+function extractApiKeyValues(value: unknown): string[] {
+  if (Array.isArray(value)) return value.flatMap(extractApiKeyValues);
+  if (!value || typeof value !== "object") return [];
+
+  const record = value as Record<string, unknown>;
+  const fields = ["api_key", "secret", "publishable_key", "secret_key", "anon", "service_role"];
+  return fields.flatMap((field) => {
+    const fieldValue = record[field];
+    return typeof fieldValue === "string" ? [fieldValue] : extractApiKeyValues(fieldValue);
+  });
+}
+
+function shouldAbortOwnershipIntrospection(res: Response | undefined): boolean {
+  if (!res) return true;
+  return res.status === 401 || res.status === 403 || res.status === 429 || res.status >= 500;
+}
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function unknownOwnership(
+  evidence: string,
+  strategy: OwnershipResult["strategy"],
+  confidence: OwnershipResult["confidence"],
+): OwnershipResult {
+  return {
+    verdict: "unknown",
+    adminCanBill: false,
+    confidence,
+    evidence,
+    strategy,
+  };
 }
 
 function fromResponse(res: Response, op: string) {
