@@ -107,3 +107,111 @@ describe("adapter-ai-gateway.revoke", () => {
     expect(result.ok).toBe(true);
   });
 });
+
+describe("adapter-ai-gateway.ownedBy", () => {
+  test("returns self for a live key when admin has exactly one Vercel team", async () => {
+    mockFetch((url, init) => {
+      if (url === "https://ai-gateway.vercel.sh/v1/models") {
+        expect((init?.headers as Record<string, string>)?.Authorization).toBe(
+          `Bearer ${validAiGatewayKey()}`,
+        );
+        return new Response(JSON.stringify({ data: [{ id: "openai/gpt-5.4" }] }), {
+          status: 200,
+        });
+      }
+      if (url === "https://api.vercel.com/v2/teams") {
+        expect((init?.headers as Record<string, string>)?.Authorization).toBe("Bearer vercel_test");
+        return new Response(
+          JSON.stringify({
+            teams: [{ id: "team_one", slug: "one", membership: { role: "OWNER" } }],
+          }),
+          { status: 200 },
+        );
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    const result = await aiGatewayAdapter.ownedBy?.(validAiGatewayKey(), mockCtx);
+
+    expect(result?.verdict).toBe("self");
+    expect(result?.scope).toBe("team");
+    expect(result?.teamRole).toBe("admin");
+    expect(result?.adminCanBill).toBe(true);
+    expect(result?.confidence).toBe("medium");
+    expect(result?.strategy).toBe("format-decode");
+    expect(calls.map((call) => call.url)).toEqual([
+      "https://ai-gateway.vercel.sh/v1/models",
+      "https://api.vercel.com/v2/teams",
+    ]);
+  });
+
+  test("returns other for an OIDC token owned by a different team", async () => {
+    mockFetch((url) => {
+      if (url === "https://api.vercel.com/v2/teams") {
+        return new Response(
+          JSON.stringify({
+            teams: [{ id: "team_admin", slug: "admin", membership: { role: "MEMBER" } }],
+          }),
+          { status: 200 },
+        );
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    const result = await aiGatewayAdapter.ownedBy?.(oidcToken("team_elsewhere"), mockCtx);
+
+    expect(result?.verdict).toBe("other");
+    expect(result?.scope).toBe("team");
+    expect(result?.adminCanBill).toBe(false);
+    expect(result?.confidence).toBe("high");
+    expect(result?.strategy).toBe("format-decode");
+    expect(calls.map((call) => call.url)).toEqual(["https://api.vercel.com/v2/teams"]);
+  });
+
+  test("returns unknown on a revoked key", async () => {
+    mockFetch((url) => {
+      if (url === "https://ai-gateway.vercel.sh/v1/models") {
+        return new Response("unauthorized", { status: 401 });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    const result = await aiGatewayAdapter.ownedBy?.(validAiGatewayKey(), mockCtx);
+
+    expect(result?.verdict).toBe("unknown");
+    expect(result?.adminCanBill).toBe(false);
+    expect(result?.confidence).toBe("low");
+    expect(result?.evidence).toBe("AI Gateway key revoked or invalid");
+    expect(calls).toHaveLength(1);
+  });
+
+  test("returns unknown on a network error", async () => {
+    global.fetch = ((url: RequestInfo | URL, init?: RequestInit) => {
+      const u = typeof url === "string" ? url : url.toString();
+      calls.push({ url: u, init });
+      throw new Error("socket closed");
+    }) as FetchFn;
+
+    const result = await aiGatewayAdapter.ownedBy?.(validAiGatewayKey(), mockCtx);
+
+    expect(result?.verdict).toBe("unknown");
+    expect(result?.adminCanBill).toBe(false);
+    expect(result?.evidence).toBe("AI Gateway ownership check network error");
+  });
+});
+
+function validAiGatewayKey(): string {
+  return "vck_abcdefghijklmnopqrstuvwxyzABCDEF0123456789";
+}
+
+function oidcToken(ownerId: string): string {
+  return [
+    base64Url(JSON.stringify({ alg: "RS256", typ: "JWT" })),
+    base64Url(JSON.stringify({ owner_id: ownerId })),
+    "signature",
+  ].join(".");
+}
+
+function base64Url(value: string): string {
+  return Buffer.from(value, "utf8").toString("base64url");
+}

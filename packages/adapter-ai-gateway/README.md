@@ -19,6 +19,16 @@ Vercel AI Gateway API keys are currently managed from the Vercel dashboard. This
 
 The created token can be propagated as `AI_GATEWAY_API_KEY` for AI Gateway usage. Users who need literal AI Gateway project-scoped keys should use a future adapter if Vercel exposes a dedicated API for those keys.
 
+## Ownership detection
+
+`ownedBy()` uses a format-decode strategy because Vercel does not expose a public REST API to list, inspect, or rotate `vck_*` AI Gateway API keys.
+
+For static AI Gateway keys, the adapter first checks for the `vck_` format, then performs a read-only `GET https://ai-gateway.vercel.sh/v1/models` liveness probe with the key itself. A live key proves validity but does not reveal the owning team. If the admin's Vercel token can list exactly one team through `GET /v2/teams`, the adapter returns `verdict: "self"` with `confidence: "medium"` and treats that single team as the likely billing scope. If the admin belongs to zero or multiple teams, ownership remains `unknown`.
+
+For Vercel OIDC JWTs used as AI Gateway credentials, the adapter decodes the JWT payload and reads `owner_id` when it is a `team_*` value. If that team appears in the admin's Vercel teams, the result is `self`; otherwise it is `other`. OIDC results are format-derived and use `confidence: "high"` when the team comparison is available.
+
+The adapter intentionally does not implement `preloadOwnership()` because there is no list-match strategy for AI Gateway keys. It also does not scrape the Vercel dashboard.
+
 ## Auth Setup
 
 The adapter authenticates to Vercel using the Vercel CLI auth token, then falls back to `VERCEL_TOKEN`.
