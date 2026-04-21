@@ -30,6 +30,18 @@ The adapter sends `Authorization: Key <FAL_ADMIN_KEY>`. The prefix is `Key`, not
 
 For projects that expose both `FAL_KEY`, `FAL_API_KEY`, and additional aliases, define one consumer entry per target environment variable. rotate-cli consumers handle propagation; this adapter only creates, verifies, lists, and revokes fal.ai keys.
 
+## Ownership detection
+
+fal.ai does not expose a key introspection endpoint, so ownership detection uses a `list-match` strategy with medium confidence.
+
+`preloadOwnership()` builds a one-time reverse index from `GET /v1/keys?limit=100&expand=creator_info`, following pagination with `cursor`. `ownedBy()` extracts the `key_id` from candidate values in `key_id:key_secret` form and checks whether that id appears in the admin key's cached list.
+
+- Match: returns `self`, `adminCanBill: true`, `scope: "team"`, `teamRole: "admin"`, and medium confidence.
+- Miss after a complete list: returns `other` with medium confidence because the key was not visible to the current fal.ai admin account.
+- Malformed single-string keys, auth failures, rate limits, provider errors, and network errors return `unknown`.
+
+The ownership check is read-only. It does not probe candidate keys against model endpoints and never calls delete or create operations.
+
 ## Config Example
 
 ```yaml

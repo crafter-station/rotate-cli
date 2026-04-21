@@ -112,3 +112,126 @@ describe("adapter-fal.revoke", () => {
     expect(r.ok).toBe(true);
   });
 });
+
+describe("adapter-fal.ownedBy", () => {
+  test("returns self when the key_id is in the admin list", async () => {
+    mockFetch(
+      () =>
+        new Response(
+          JSON.stringify({
+            keys: [{ key_id: "key_self", alias: "Production", scope: "API" }],
+            has_more: false,
+          }),
+          { status: 200 },
+        ),
+    );
+
+    const result = await falAdapter.ownedBy?.("key_self:sk_live_self", mockCtx);
+
+    expect(result?.verdict).toBe("self");
+    expect(result?.adminCanBill).toBe(true);
+    expect(result?.confidence).toBe("medium");
+    expect(result?.strategy).toBe("list-match");
+    expect(result?.evidence).toContain("key_self");
+    expect(calls[0]?.url).toContain("/v1/keys?limit=100&expand=creator_info");
+    expect((calls[0]?.init?.headers as Record<string, string>)?.Authorization).toBe(
+      "Key admin_old",
+    );
+  });
+
+  test("returns other when the key_id is absent from a complete admin list", async () => {
+    mockFetch(
+      () =>
+        new Response(JSON.stringify({ keys: [{ key_id: "key_self" }], has_more: false }), {
+          status: 200,
+        }),
+    );
+
+    const result = await falAdapter.ownedBy?.("key_elsewhere:sk_live_other", mockCtx);
+
+    expect(result?.verdict).toBe("other");
+    expect(result?.adminCanBill).toBe(false);
+    expect(result?.confidence).toBe("medium");
+    expect(result?.evidence).toContain("key_elsewhere");
+  });
+
+  test("returns unknown on 401", async () => {
+    mockFetch(() => new Response("unauthorized", { status: 401 }));
+
+    const result = await falAdapter.ownedBy?.("key_self:sk_live_self", mockCtx);
+
+    expect(result?.verdict).toBe("unknown");
+    expect(result?.adminCanBill).toBe(false);
+    expect(result?.confidence).toBe("low");
+    expect(result?.evidence).toBe("fal ownership list failed: admin authentication failed");
+  });
+
+  test("returns unknown on network error", async () => {
+    mockFetch(() => {
+      throw new Error("socket closed");
+    });
+
+    const result = await falAdapter.ownedBy?.("key_self:sk_live_self", mockCtx);
+
+    expect(result?.verdict).toBe("unknown");
+    expect(result?.adminCanBill).toBe(false);
+    expect(result?.confidence).toBe("low");
+    expect(result?.evidence).toBe("fal ownership list failed: network error");
+  });
+
+  test("uses preloaded ownership data without a fetch", async () => {
+    const result = await falAdapter.ownedBy?.("key_self:sk_live_self", mockCtx, {
+      preload: {
+        provider: "fal-ai",
+        strategy: "list-match",
+        complete: true,
+        keysById: {
+          key_self: { keyId: "key_self", alias: "Production", scope: "API" },
+        },
+      },
+    });
+
+    expect(result?.verdict).toBe("self");
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("adapter-fal.preloadOwnership", () => {
+  test("builds a paginated key_id index", async () => {
+    mockFetch((url) => {
+      if (url.includes("cursor=page_2")) {
+        return new Response(
+          JSON.stringify({
+            keys: [{ key_id: "key_two", alias: "Staging", scope: "API" }],
+            has_more: false,
+          }),
+          { status: 200 },
+        );
+      }
+
+      return new Response(
+        JSON.stringify({
+          keys: [{ key_id: "key_one", alias: "Production", scope: "API" }],
+          has_more: true,
+          next_cursor: "page_2",
+        }),
+        { status: 200 },
+      );
+    });
+
+    const preload = await falAdapter.preloadOwnership?.(mockCtx);
+
+    expect(preload).toEqual({
+      provider: "fal-ai",
+      strategy: "list-match",
+      complete: true,
+      keysById: {
+        key_one: { keyId: "key_one", alias: "Production", scope: "API" },
+        key_two: { keyId: "key_two", alias: "Staging", scope: "API" },
+      },
+      evidence: "fal ownership index contains 2 key_id values",
+    });
+    expect(calls).toHaveLength(2);
+    expect(calls[1]?.url).toContain("cursor=page_2");
+  });
+});

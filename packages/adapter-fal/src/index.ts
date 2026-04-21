@@ -2,6 +2,9 @@ import { makeError } from "@rotate/core";
 import type {
   Adapter,
   AuthContext,
+  OwnershipOptions,
+  OwnershipPreload,
+  OwnershipResult,
   RotationResult,
   RotationSpec,
   Secret,
@@ -29,6 +32,21 @@ interface FalListKeysResponse {
   next_cursor?: string;
   has_more?: boolean;
   keys?: FalKeyEntry[];
+}
+
+interface FalOwnershipKey {
+  keyId: string;
+  alias?: string;
+  scope?: string;
+}
+
+interface FalOwnershipPreload extends Record<string, unknown> {
+  provider: typeof FAL_PROVIDER;
+  strategy: "list-match";
+  complete: boolean;
+  keysById: Record<string, FalOwnershipKey>;
+  errorCode?: string;
+  evidence?: string;
 }
 
 export const falAdapter: Adapter = {
@@ -128,6 +146,64 @@ export const falAdapter: Adapter = {
       })),
     };
   },
+
+  async preloadOwnership(ctx: AuthContext): Promise<OwnershipPreload> {
+    return buildOwnershipPreload(ctx);
+  },
+
+  async ownedBy(
+    secretValue: string,
+    ctx: AuthContext,
+    opts?: OwnershipOptions,
+  ): Promise<OwnershipResult> {
+    const keyId = keyIdFromSecret(secretValue);
+    if (!keyId) {
+      return ownershipUnknown(
+        "fal key is not in key_id:key_secret form; cannot extract a key_id",
+        "low",
+      );
+    }
+
+    const preload = isFalOwnershipPreload(opts?.preload)
+      ? opts.preload
+      : await buildOwnershipPreload(ctx);
+
+    if (preload.errorCode === "auth_failed") {
+      return ownershipUnknown("fal ownership list failed: admin authentication failed", "low");
+    }
+    if (preload.errorCode === "rate_limited") {
+      return ownershipUnknown("fal ownership list rate limited", "low");
+    }
+    if (preload.errorCode === "provider_error") {
+      return ownershipUnknown("provider unavailable", "low");
+    }
+    if (!preload.complete) {
+      return ownershipUnknown(preload.evidence ?? "fal ownership index unavailable", "low");
+    }
+
+    const entry = preload.keysById[keyId];
+    if (entry) {
+      const alias = entry.alias ? ` alias ${entry.alias}` : " matching cached key_id";
+      return {
+        verdict: "self",
+        adminCanBill: true,
+        scope: "team",
+        teamRole: "admin",
+        confidence: "medium",
+        evidence: `fal admin key can list key_id ${keyId};${alias}`,
+        strategy: "list-match",
+      };
+    }
+
+    return {
+      verdict: "other",
+      adminCanBill: false,
+      scope: "team",
+      confidence: "medium",
+      evidence: `fal key_id ${keyId} was not found in the admin key list snapshot`,
+      strategy: "list-match",
+    };
+  },
 };
 
 export default falAdapter;
@@ -185,6 +261,106 @@ async function listKeys(
     if (filter.scope && key.scope !== filter.scope) return false;
     return Boolean(key.key_id);
   });
+}
+
+async function buildOwnershipPreload(ctx: AuthContext): Promise<FalOwnershipPreload> {
+  const keysById: Record<string, FalOwnershipKey> = {};
+  let cursor: string | undefined;
+
+  do {
+    const res = await ownershipListPage(ctx.token, cursor);
+    if (res instanceof Error) {
+      const error = networkError(res);
+      return {
+        provider: FAL_PROVIDER,
+        strategy: "list-match",
+        complete: false,
+        keysById,
+        errorCode: error.code,
+        evidence: "fal ownership list failed: network error",
+      };
+    }
+    if (!res.ok) {
+      const error = fromResponse(res, "ownership");
+      return {
+        provider: FAL_PROVIDER,
+        strategy: "list-match",
+        complete: false,
+        keysById,
+        errorCode: error.code,
+        evidence: ownershipFailureEvidence(error.code),
+      };
+    }
+
+    const body = (await res.json()) as FalListKeysResponse;
+    for (const key of body.keys ?? []) {
+      if (!key.key_id) continue;
+      keysById[key.key_id] = compactOwnershipKey({
+        keyId: key.key_id,
+        alias: key.alias,
+        scope: key.scope,
+      });
+    }
+    cursor = body.has_more ? body.next_cursor : undefined;
+  } while (cursor);
+
+  return {
+    provider: FAL_PROVIDER,
+    strategy: "list-match",
+    complete: true,
+    keysById,
+    evidence: `fal ownership index contains ${Object.keys(keysById).length} key_id values`,
+  };
+}
+
+async function ownershipListPage(token: string, cursor?: string): Promise<Response | Error> {
+  const qs = new URLSearchParams({ limit: "100", expand: "creator_info" });
+  if (cursor) qs.set("cursor", cursor);
+  return request(`${FAL_API_BASE}/keys?${qs.toString()}`, {
+    headers: authHeaders(token),
+  });
+}
+
+function keyIdFromSecret(secretValue: string): string | undefined {
+  const colon = secretValue.indexOf(":");
+  if (colon <= 0 || colon === secretValue.length - 1) return undefined;
+  return secretValue.slice(0, colon);
+}
+
+function isFalOwnershipPreload(
+  preload: OwnershipPreload | undefined,
+): preload is FalOwnershipPreload {
+  if (!preload) return false;
+  return preload.provider === FAL_PROVIDER && preload.strategy === "list-match";
+}
+
+function ownershipUnknown(
+  evidence: string,
+  confidence: OwnershipResult["confidence"],
+): OwnershipResult {
+  return {
+    verdict: "unknown",
+    adminCanBill: false,
+    scope: "team",
+    confidence,
+    evidence,
+    strategy: "list-match",
+  };
+}
+
+function compactOwnershipKey(input: FalOwnershipKey): FalOwnershipKey {
+  return {
+    keyId: input.keyId,
+    ...(input.alias ? { alias: input.alias } : {}),
+    ...(input.scope ? { scope: input.scope } : {}),
+  };
+}
+
+function ownershipFailureEvidence(code: string): string {
+  if (code === "auth_failed") return "fal ownership list failed: admin authentication failed";
+  if (code === "rate_limited") return "fal ownership list rate limited";
+  if (code === "provider_error") return "provider unavailable";
+  return "fal ownership index unavailable";
 }
 
 function compactMetadata(input: Record<string, string | undefined>): Record<string, string> {
