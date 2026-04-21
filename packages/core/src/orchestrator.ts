@@ -6,9 +6,11 @@ import type {
   AdapterError,
   ConsumerState,
   ConsumerTargetConfig,
+  OwnershipPreload,
   Rotation,
   Secret,
   SecretConfig,
+  SkipReason,
 } from "./types.ts";
 
 export interface ApplyOptions {
@@ -17,11 +19,23 @@ export interface ApplyOptions {
   auditLog?: string;
   parallel?: number;
   skipVerify?: boolean;
+  /** Current secret value — used for the ownership check. Injected by the
+   *  orchestrator's resolveCurrentValue (commit 2). */
+  currentValue?: string;
+  /** Pre-warmed per-adapter ownership index (commit 3). */
+  ownershipPreload?: OwnershipPreload;
+  /** Co-located env vars from the same Vercel project — passed into ownedBy
+   *  for sibling-inheritance strategies. */
+  coLocatedVars?: Record<string, string>;
+  /** Ownership gate behavior. Defaults: skip "other", proceed "unknown". */
+  skipUnknown?: boolean;
+  forceRotateOther?: boolean;
+  noOwnershipCheck?: boolean;
 }
 
 export interface ApplyResult {
   rotation: Rotation;
-  envelopeStatus: "success" | "partial" | "error";
+  envelopeStatus: "success" | "partial" | "error" | "skipped";
 }
 
 /** Run the create + propagate + verify pipeline. Does NOT revoke. */
@@ -59,8 +73,58 @@ export async function applyRotation(
     savedAt: new Date().toISOString(),
   });
 
-  // Step 1: Create.
+  // Step 0: Ownership gate (optional, opt-out via opts.noOwnershipCheck).
   const authCtx = await adapter.auth();
+  if (adapter.ownedBy && !opts.noOwnershipCheck && opts.currentValue) {
+    try {
+      const ownership = await adapter.ownedBy(opts.currentValue, authCtx, {
+        coLocatedVars: opts.coLocatedVars,
+        preload: opts.ownershipPreload,
+      });
+      rotation.ownership = ownership;
+
+      const skipReason = decideSkip(ownership, opts);
+      if (skipReason) {
+        rotation.status = "skipped";
+        rotation.skipReason = skipReason;
+        saveCheckpoint({
+          rotationId: rotation.id,
+          rotation,
+          stepCompleted: "none",
+          savedAt: new Date().toISOString(),
+        });
+        audit(opts.auditLog, rotation);
+        return { rotation, envelopeStatus: "skipped" };
+      }
+    } catch (cause) {
+      // Gate failure should not block rotation — fall back to "unknown" behavior.
+      rotation.errors.push(
+        makeError("provider_error", `ownership check failed: ${String(cause)}`, secret.adapter, {
+          retryable: true,
+          cause,
+        }),
+      );
+    }
+  } else if (adapter.ownedBy && !opts.noOwnershipCheck && !opts.currentValue) {
+    // Current value unavailable — treat like "unknown" verdict.
+    if (opts.skipUnknown) {
+      rotation.status = "skipped";
+      rotation.skipReason = {
+        kind: "ownership-current-value-unavailable",
+        evidence: `current value for ${secret.id} unavailable; set secrets[].currentValueEnv or disable with --no-ownership-check`,
+      };
+      saveCheckpoint({
+        rotationId: rotation.id,
+        rotation,
+        stepCompleted: "none",
+        savedAt: new Date().toISOString(),
+      });
+      audit(opts.auditLog, rotation);
+      return { rotation, envelopeStatus: "skipped" };
+    }
+  }
+
+  // Step 1: Create.
   const createResult = await adapter.create(
     {
       secretId: secret.id,
@@ -294,4 +358,33 @@ export async function revokeRotation(
   rotation.status = "revoked";
   audit(opts.auditLog, rotation);
   return { ok: true, errors: [] };
+}
+
+/**
+ * Decide whether an ownership verdict should skip the rotation.
+ * Returns `null` when the rotation should proceed.
+ */
+export function decideSkip(
+  ownership: import("./types.ts").OwnershipResult,
+  opts: Pick<ApplyOptions, "skipUnknown" | "forceRotateOther">,
+): SkipReason | null {
+  if (ownership.verdict === "other" && !opts.forceRotateOther) {
+    return {
+      kind: "ownership-other",
+      evidence: ownership.evidence,
+    };
+  }
+  if (ownership.verdict === "self" && !ownership.adminCanBill) {
+    return {
+      kind: "ownership-self-member-only",
+      evidence: `${ownership.evidence} (your role: ${ownership.teamRole ?? "member"})`,
+    };
+  }
+  if (ownership.verdict === "unknown" && opts.skipUnknown) {
+    return {
+      kind: "ownership-unknown-skipped",
+      evidence: ownership.evidence,
+    };
+  }
+  return null;
 }

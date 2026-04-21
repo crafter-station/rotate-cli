@@ -249,6 +249,20 @@ export interface SecretConfig {
   metadata?: Record<string, string>;
   tags?: string[];
   consumers: ConsumerTargetConfig[];
+  /**
+   * Name of a process.env variable that holds the CURRENT secret value
+   * (before rotation). Enables the orchestrator's ownership check without
+   * having to pull the value from Vercel at runtime.
+   *
+   * Example: `current_value_env: CLERK_SECRET_KEY_CURRENT` reads
+   * process.env.CLERK_SECRET_KEY_CURRENT at plan time.
+   */
+  currentValueEnv?: string;
+  /**
+   * Literal current secret value. Dangerous — only for local testing.
+   * Emits a warning on load. Prefer `currentValueEnv`.
+   */
+  currentValue?: string;
 }
 
 export interface ConsumerTargetConfig {
@@ -291,9 +305,28 @@ export interface Rotation {
   consumers: ConsumerState[];
   errors: AdapterError[];
   agentMode: boolean;
+  /** Ownership check result at rotation time, if the adapter supports it. */
+  ownership?: OwnershipResult;
+  /** Populated when `status === "skipped"` — why this rotation did not run. */
+  skipReason?: SkipReason;
 }
 
-export type RotationStatus = "in_progress" | "in_grace" | "revoked" | "rolled_back" | "failed";
+export type RotationStatus =
+  | "in_progress"
+  | "in_grace"
+  | "revoked"
+  | "rolled_back"
+  | "failed"
+  | "skipped";
+
+export interface SkipReason {
+  kind:
+    | "ownership-other"
+    | "ownership-self-member-only"
+    | "ownership-unknown-skipped"
+    | "ownership-current-value-unavailable";
+  evidence: string;
+}
 
 export interface ConsumerState {
   target: ConsumerTarget;

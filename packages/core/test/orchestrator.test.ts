@@ -195,3 +195,183 @@ describe("orchestrator.revokeRotation", () => {
     expect(rotation.status).toBe("revoked");
   });
 });
+
+function makeMockAdapterWithOwnership(
+  verdict: "self" | "other" | "unknown",
+  adminCanBill = true,
+): Adapter {
+  const base = makeMockAdapter();
+  return {
+    ...base,
+    async ownedBy(_v: string, _ctx: AuthContext) {
+      return {
+        verdict,
+        adminCanBill,
+        confidence: "high" as const,
+        evidence: `mock ${verdict}`,
+        strategy: "api-introspection" as const,
+      };
+    },
+  };
+}
+
+describe("orchestrator.applyRotation ownership gate", () => {
+  let stateDir: string;
+  beforeEach(() => {
+    resetRegistry();
+    stateDir = mkdtempSync(join(tmpdir(), "rotate-cli-test-"));
+    process.env.ROTATE_CLI_STATE_DIR = stateDir;
+  });
+  afterEach(() => {
+    rmSync(stateDir, { recursive: true, force: true });
+    delete process.env.ROTATE_CLI_STATE_DIR;
+  });
+
+  test("skips when ownedBy returns other", async () => {
+    registerAdapter(makeMockAdapterWithOwnership("other"));
+    registerConsumer(makeMockConsumer("mock-consumer"));
+
+    const { rotation, envelopeStatus } = await applyRotation(
+      {
+        id: "primary",
+        adapter: "mock-provider",
+        metadata: {},
+        consumers: [{ type: "mock-consumer", params: { project: "p", var_name: "K" } }],
+      },
+      { currentValue: "sk-current" },
+    );
+
+    expect(envelopeStatus).toBe("skipped");
+    expect(rotation.status).toBe("skipped");
+    expect(rotation.skipReason?.kind).toBe("ownership-other");
+    expect(rotation.newSecret).toBeUndefined();
+  });
+
+  test("skips self + not-admin-billable", async () => {
+    registerAdapter(makeMockAdapterWithOwnership("self", false));
+    registerConsumer(makeMockConsumer("mock-consumer"));
+
+    const { rotation, envelopeStatus } = await applyRotation(
+      {
+        id: "primary",
+        adapter: "mock-provider",
+        metadata: {},
+        consumers: [{ type: "mock-consumer", params: { project: "p", var_name: "K" } }],
+      },
+      { currentValue: "sk-current" },
+    );
+
+    expect(envelopeStatus).toBe("skipped");
+    expect(rotation.skipReason?.kind).toBe("ownership-self-member-only");
+  });
+
+  test("proceeds when self + adminCanBill=true", async () => {
+    registerAdapter(makeMockAdapterWithOwnership("self", true));
+    registerConsumer(makeMockConsumer("mock-consumer"));
+
+    const { rotation, envelopeStatus } = await applyRotation(
+      {
+        id: "primary",
+        adapter: "mock-provider",
+        metadata: {},
+        consumers: [{ type: "mock-consumer", params: { project: "p", var_name: "K" } }],
+      },
+      { currentValue: "sk-current" },
+    );
+
+    expect(envelopeStatus).toBe("success");
+    expect(rotation.status).toBe("in_grace");
+    expect(rotation.newSecret?.value).toMatch(/^sk_live_/);
+    expect(rotation.ownership?.verdict).toBe("self");
+  });
+
+  test("proceeds on unknown by default", async () => {
+    registerAdapter(makeMockAdapterWithOwnership("unknown"));
+    registerConsumer(makeMockConsumer("mock-consumer"));
+
+    const { rotation, envelopeStatus } = await applyRotation(
+      {
+        id: "primary",
+        adapter: "mock-provider",
+        metadata: {},
+        consumers: [{ type: "mock-consumer", params: { project: "p", var_name: "K" } }],
+      },
+      { currentValue: "sk-current" },
+    );
+
+    expect(envelopeStatus).toBe("success");
+    expect(rotation.status).toBe("in_grace");
+  });
+
+  test("skips unknown when --skip-unknown", async () => {
+    registerAdapter(makeMockAdapterWithOwnership("unknown"));
+    registerConsumer(makeMockConsumer("mock-consumer"));
+
+    const { rotation, envelopeStatus } = await applyRotation(
+      {
+        id: "primary",
+        adapter: "mock-provider",
+        metadata: {},
+        consumers: [{ type: "mock-consumer", params: { project: "p", var_name: "K" } }],
+      },
+      { currentValue: "sk-current", skipUnknown: true },
+    );
+
+    expect(envelopeStatus).toBe("skipped");
+    expect(rotation.skipReason?.kind).toBe("ownership-unknown-skipped");
+  });
+
+  test("proceeds with --force-rotate-other even if other", async () => {
+    registerAdapter(makeMockAdapterWithOwnership("other"));
+    registerConsumer(makeMockConsumer("mock-consumer"));
+
+    const { rotation, envelopeStatus } = await applyRotation(
+      {
+        id: "primary",
+        adapter: "mock-provider",
+        metadata: {},
+        consumers: [{ type: "mock-consumer", params: { project: "p", var_name: "K" } }],
+      },
+      { currentValue: "sk-current", forceRotateOther: true },
+    );
+
+    expect(envelopeStatus).toBe("success");
+    expect(rotation.ownership?.verdict).toBe("other");
+  });
+
+  test("adapter without ownedBy skips the gate entirely", async () => {
+    registerAdapter(makeMockAdapter()); // no ownedBy
+    registerConsumer(makeMockConsumer("mock-consumer"));
+
+    const { rotation, envelopeStatus } = await applyRotation(
+      {
+        id: "primary",
+        adapter: "mock-provider",
+        metadata: {},
+        consumers: [{ type: "mock-consumer", params: { project: "p", var_name: "K" } }],
+      },
+      { currentValue: "sk-current" },
+    );
+
+    expect(envelopeStatus).toBe("success");
+    expect(rotation.ownership).toBeUndefined();
+  });
+
+  test("unavailable currentValue + skipUnknown → skip", async () => {
+    registerAdapter(makeMockAdapterWithOwnership("self"));
+    registerConsumer(makeMockConsumer("mock-consumer"));
+
+    const { rotation, envelopeStatus } = await applyRotation(
+      {
+        id: "primary",
+        adapter: "mock-provider",
+        metadata: {},
+        consumers: [{ type: "mock-consumer", params: { project: "p", var_name: "K" } }],
+      },
+      { skipUnknown: true }, // no currentValue
+    );
+
+    expect(envelopeStatus).toBe("skipped");
+    expect(rotation.skipReason?.kind).toBe("ownership-current-value-unavailable");
+  });
+});
