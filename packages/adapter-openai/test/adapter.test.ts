@@ -29,6 +29,12 @@ const mockCtx: AuthContext = {
   token: "sk-admin-old",
 };
 
+const mockOwnershipCtx = {
+  ...mockCtx,
+  knownOrgIds: new Set(["org_self"]),
+  knownUserIds: new Set(["user_self"]),
+};
+
 describe("adapter-openai.create", () => {
   test("calls Admin API and returns Secret", async () => {
     mockFetch(
@@ -105,5 +111,99 @@ describe("adapter-openai.revoke", () => {
     };
     const r = await openaiAdapter.revoke(secret, mockCtx);
     expect(r.ok).toBe(true);
+  });
+});
+
+describe("adapter-openai.ownedBy", () => {
+  test("returns self when /v1/me matches a known user", async () => {
+    mockFetch(
+      () =>
+        new Response(
+          JSON.stringify({
+            object: "user",
+            id: "user_self",
+            orgs: { data: [{ id: "org_elsewhere", title: "Elsewhere" }] },
+          }),
+          { status: 200 },
+        ),
+    );
+
+    const result = await openaiAdapter.ownedBy?.("sk-proj-candidate", mockOwnershipCtx);
+
+    expect(result?.verdict).toBe("self");
+    expect(result?.adminCanBill).toBe(true);
+    expect(result?.scope).toBe("user");
+    expect(result?.confidence).toBe("high");
+    expect(result?.strategy).toBe("api-introspection");
+    expect(calls[0]?.url).toBe("https://api.openai.com/v1/me");
+    expect((calls[0]?.init?.headers as Record<string, string>)?.Authorization).toBe(
+      "Bearer sk-proj-candidate",
+    );
+  });
+
+  test("returns self when /v1/me matches a known org", async () => {
+    mockFetch(
+      () =>
+        new Response(
+          JSON.stringify({
+            object: "user",
+            id: "user_collaborator",
+            orgs: { data: [{ id: "org_self", title: "Self Org" }] },
+          }),
+          { status: 200 },
+        ),
+    );
+
+    const result = await openaiAdapter.ownedBy?.("sk-candidate", mockOwnershipCtx);
+
+    expect(result?.verdict).toBe("self");
+    expect(result?.adminCanBill).toBe(true);
+    expect(result?.scope).toBe("org");
+    expect(result?.confidence).toBe("high");
+  });
+
+  test("returns other when /v1/me only reports external orgs", async () => {
+    mockFetch(
+      () =>
+        new Response(
+          JSON.stringify({
+            object: "user",
+            id: "user_other",
+            orgs: { data: [{ id: "org_other", title: "Other Org" }] },
+          }),
+          { status: 200 },
+        ),
+    );
+
+    const result = await openaiAdapter.ownedBy?.("sk-candidate", mockOwnershipCtx);
+
+    expect(result?.verdict).toBe("other");
+    expect(result?.adminCanBill).toBe(false);
+    expect(result?.scope).toBe("org");
+    expect(result?.confidence).toBe("high");
+  });
+
+  test("returns unknown on 401", async () => {
+    mockFetch(() => new Response("unauthorized", { status: 401 }));
+
+    const result = await openaiAdapter.ownedBy?.("sk-revoked", mockOwnershipCtx);
+
+    expect(result?.verdict).toBe("unknown");
+    expect(result?.adminCanBill).toBe(false);
+    expect(result?.confidence).toBe("low");
+  });
+
+  test("returns unknown on network error", async () => {
+    global.fetch = ((url: RequestInfo | URL, init?: RequestInit) => {
+      const u = typeof url === "string" ? url : url.toString();
+      calls.push({ url: u, init });
+      return Promise.reject(new Error("socket closed"));
+    }) as FetchFn;
+
+    const result = await openaiAdapter.ownedBy?.("sk-candidate", mockOwnershipCtx);
+
+    expect(result?.verdict).toBe("unknown");
+    expect(result?.adminCanBill).toBe(false);
+    expect(result?.evidence).toContain("network error");
   });
 });

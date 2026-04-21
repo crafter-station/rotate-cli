@@ -2,6 +2,8 @@ import { makeError } from "@rotate/core";
 import type {
   Adapter,
   AuthContext,
+  OwnershipOptions,
+  OwnershipResult,
   RotationResult,
   RotationSpec,
   Secret,
@@ -9,6 +11,7 @@ import type {
 
 const OPENAI_ADMIN_KEYS_BASE =
   process.env.OPENAI_ADMIN_KEYS_URL ?? "https://api.openai.com/v1/organization/admin_api_keys";
+const OPENAI_ME_URL = process.env.OPENAI_ME_URL ?? "https://api.openai.com/v1/me";
 
 interface OpenAIAdminApiKey {
   id: string;
@@ -28,6 +31,22 @@ interface OpenAIAdminApiKey {
 interface OpenAIListResponse {
   data?: OpenAIAdminApiKey[];
 }
+
+interface OpenAIMeResponse {
+  object?: string;
+  id?: string;
+  orgs?: {
+    data?: Array<{
+      id?: string;
+      title?: string;
+    }>;
+  };
+}
+
+type OpenAIOwnershipContext = AuthContext & {
+  knownOrgIds?: Iterable<string>;
+  knownUserIds?: Iterable<string>;
+};
 
 export const openaiAdapter: Adapter = {
   name: "openai",
@@ -129,6 +148,69 @@ export const openaiAdapter: Adapter = {
       })),
     };
   },
+
+  async ownedBy(
+    secretValue: string,
+    ctx: AuthContext,
+    opts?: OwnershipOptions,
+  ): Promise<OwnershipResult> {
+    const res = await request(OPENAI_ME_URL, {
+      headers: authHeaders(secretValue),
+    });
+    if (res instanceof Error)
+      return unknownOwnership("network error during OpenAI ownership check");
+    if (!res.ok) return ownershipFromFailedResponse(res);
+
+    let me: OpenAIMeResponse;
+    try {
+      me = (await res.json()) as OpenAIMeResponse;
+    } catch {
+      return unknownOwnership("OpenAI ownership response was not valid JSON");
+    }
+
+    const knownUserIds = ownershipSet(ctx, opts, "knownUserIds");
+    const knownOrgIds = ownershipSet(ctx, opts, "knownOrgIds");
+    const userId = typeof me.id === "string" ? me.id : undefined;
+    const orgIds = (me.orgs?.data ?? [])
+      .map((org) => org.id)
+      .filter((id): id is string => typeof id === "string" && id.length > 0);
+
+    if (userId && knownUserIds.has(userId)) {
+      return {
+        verdict: "self",
+        adminCanBill: true,
+        scope: "user",
+        confidence: "high",
+        evidence: "OpenAI /v1/me returned a user id present in the admin ownership context",
+        strategy: "api-introspection",
+      };
+    }
+
+    if (orgIds.some((id) => knownOrgIds.has(id))) {
+      return {
+        verdict: "self",
+        adminCanBill: true,
+        scope: "org",
+        confidence: "high",
+        evidence:
+          "OpenAI /v1/me returned an organization id present in the admin ownership context",
+        strategy: "api-introspection",
+      };
+    }
+
+    if (orgIds.length > 0 && (knownOrgIds.size > 0 || knownUserIds.size > 0)) {
+      return {
+        verdict: "other",
+        adminCanBill: false,
+        scope: "org",
+        confidence: "high",
+        evidence: "OpenAI /v1/me returned organization ids outside the admin ownership context",
+        strategy: "api-introspection",
+      };
+    }
+
+    return unknownOwnership("OpenAI /v1/me did not return enough ownership data to match this key");
+  },
 };
 
 export default openaiAdapter;
@@ -170,4 +252,42 @@ function fromResponse(res: Response, op: string) {
   return makeError("provider_error", `openai ${op}: ${res.status}`, "openai", {
     retryable: false,
   });
+}
+
+function ownershipSet(
+  ctx: AuthContext,
+  opts: OwnershipOptions | undefined,
+  key: "knownOrgIds" | "knownUserIds",
+): Set<string> {
+  const fromCtx = (ctx as OpenAIOwnershipContext)[key];
+  const fromPreload = opts?.preload?.[key];
+  const source = fromCtx ?? (isIterableStringSource(fromPreload) ? fromPreload : undefined);
+  return new Set(source ?? []);
+}
+
+function isIterableStringSource(value: unknown): value is Iterable<string> {
+  return typeof value === "object" && value !== null && Symbol.iterator in value;
+}
+
+function ownershipFromFailedResponse(res: Response): OwnershipResult {
+  const error = fromResponse(res, "ownedBy");
+  if (error.code === "rate_limited")
+    return unknownOwnership("OpenAI ownership check was rate limited");
+  if (error.code === "provider_error" && res.status >= 500) {
+    return unknownOwnership("provider unavailable");
+  }
+  if (error.code === "auth_failed") {
+    return unknownOwnership("OpenAI rejected ownership introspection credentials");
+  }
+  return unknownOwnership(`OpenAI ownership check returned HTTP ${res.status}`);
+}
+
+function unknownOwnership(evidence: string): OwnershipResult {
+  return {
+    verdict: "unknown",
+    adminCanBill: false,
+    confidence: "low",
+    evidence,
+    strategy: "api-introspection",
+  };
 }
