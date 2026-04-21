@@ -172,24 +172,33 @@ export async function scanVercel(opts: ScanOptions): Promise<{
         meta?: { truncated?: boolean; totalProjectCount?: number };
       };
       const projectEnvs = dashBody.projectEnvs ?? [];
+      const totalProjects = dashBody.meta?.totalProjectCount ?? projectEnvs.length;
+      const truncated = Boolean(dashBody.meta?.truncated);
 
       opts.onProgress?.({
         kind: "team-start",
         team: team.slug,
-        totalProjects: dashBody.meta?.totalProjectCount ?? projectEnvs.length,
+        totalProjects,
       });
 
+      const seenProjectNames = new Set<string>();
       let teamSecretsFound = 0;
-      for (let i = 0; i < projectEnvs.length; i++) {
-        const pe = projectEnvs[i]!;
-        for (const env of pe.envs) {
+
+      const ingest = (args: {
+        projectName: string;
+        projectId?: string;
+        envs: Array<{ id: string; key: string; type: string; target?: string[] }>;
+      }): void => {
+        if (seenProjectNames.has(args.projectName)) return;
+        seenProjectNames.add(args.projectName);
+        for (const env of args.envs) {
           if (!opts.includePublic && env.key.startsWith("NEXT_PUBLIC_")) continue;
           if (env.key === "NODE_ENV" || env.key === "VERCEL_ENV") continue;
           const adapter = mapVarToAdapter(env.key);
           if (!adapter) {
             skipped.push({
               var_name: env.key,
-              project: pe.project,
+              project: args.projectName,
               reason: "no adapter mapping",
             });
             continue;
@@ -197,17 +206,17 @@ export async function scanVercel(opts: ScanOptions): Promise<{
           const consumer: ConsumerTargetConfig = {
             type: "vercel-env",
             params: {
-              project: pe.project,
+              project: args.projectId ?? args.projectName,
               var_name: env.key,
               ...(team.id ? { team: team.id } : {}),
             },
           };
           secrets.push({
             _scanned: true,
-            _project: pe.project,
+            _project: args.projectName,
             _team: team.slug,
             _varType: env.type,
-            id: `${adapter}-${pe.project}-${env.key}`.slice(0, 120),
+            id: `${adapter}-${args.projectName}-${env.key}`.slice(0, 120),
             adapter,
             metadata: {},
             tags:
@@ -216,20 +225,82 @@ export async function scanVercel(opts: ScanOptions): Promise<{
           });
           teamSecretsFound++;
         }
+      };
+
+      for (let i = 0; i < projectEnvs.length; i++) {
+        const pe = projectEnvs[i]!;
+        ingest({ projectName: pe.project, envs: pe.envs });
         projectsScanned++;
         opts.onProgress?.({
           kind: "team-progress",
           team: team.slug,
           projectsScanned: i + 1,
-          totalProjects: projectEnvs.length,
+          totalProjects,
           secretsSoFar: teamSecretsFound,
         });
+      }
+
+      // If truncated, fill the gap via /v9/projects + per-project /env.
+      // Dedupe against the names we already ingested.
+      if (truncated && projectEnvs.length < totalProjects) {
+        const allProjects: Array<{ id: string; name: string }> = [];
+        let cursor: string | null = null;
+        for (;;) {
+          const parts = ["limit=100"];
+          if (teamIdQs) parts.push(teamIdQs);
+          if (cursor) parts.push(`until=${cursor}`);
+          const r = await fetch(`${VERCEL_BASE}/v9/projects?${parts.join("&")}`, {
+            headers,
+          });
+          if (!r.ok) break;
+          const b = (await r.json()) as {
+            projects?: Array<{ id: string; name: string }>;
+            pagination?: { next: string | null };
+          };
+          allProjects.push(...(b.projects ?? []));
+          if (!b.pagination?.next) break;
+          cursor = b.pagination.next;
+        }
+        const missing = allProjects.filter((p) => !seenProjectNames.has(p.name));
+        let scanned = projectEnvs.length;
+        const queue = [...missing];
+        await Promise.all(
+          Array.from({ length: Math.min(concurrency, queue.length) }, async () => {
+            while (queue.length) {
+              const proj = queue.shift();
+              if (!proj) continue;
+              const envUrl = team.id
+                ? `${VERCEL_BASE}/v9/projects/${proj.id}/env?decrypt=false&teamId=${team.id}`
+                : `${VERCEL_BASE}/v9/projects/${proj.id}/env?decrypt=false`;
+              const er = await fetch(envUrl, { headers });
+              if (er.ok) {
+                const eb = (await er.json()) as {
+                  envs?: Array<{ id: string; key: string; type: string; target?: string[] }>;
+                };
+                ingest({
+                  projectName: proj.name,
+                  projectId: proj.id,
+                  envs: eb.envs ?? [],
+                });
+              }
+              projectsScanned++;
+              scanned++;
+              opts.onProgress?.({
+                kind: "team-progress",
+                team: team.slug,
+                projectsScanned: scanned,
+                totalProjects,
+                secretsSoFar: teamSecretsFound,
+              });
+            }
+          }),
+        );
       }
 
       opts.onProgress?.({
         kind: "team-done",
         team: team.slug,
-        projectsScanned: projectEnvs.length,
+        projectsScanned: seenProjectNames.size,
         secretsFound: teamSecretsFound,
         durationMs: Date.now() - teamStarted,
       });
