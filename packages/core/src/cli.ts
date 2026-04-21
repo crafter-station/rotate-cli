@@ -25,11 +25,13 @@ import { applyRotation, preloadOwnershipForSecrets, revokeRotation } from "./orc
 import { createPromptIO } from "./prompt.ts";
 import { getAdapter, listAdapters, listConsumers } from "./registry.ts";
 import {
+  createScanProgressRenderer,
   renderApply,
   renderDoctor,
   renderPlan,
   renderPreviewOwnership,
   renderRevoke,
+  renderScanSummary,
   shouldRenderPretty as renderShouldPretty,
   renderStatusList,
 } from "./render.ts";
@@ -262,14 +264,18 @@ export async function runCli(argv: string[]): Promise<void> {
         );
         return;
       }
+      const pretty = shouldRenderPretty(program);
+      const progress = pretty ? createScanProgressRenderer() : null;
       let result: Awaited<ReturnType<typeof scanVercel>>;
       try {
         result = await scanVercel({
           token,
           teamSlug: opts.team,
           includePublic: opts.includePublic,
+          onProgress: progress?.handle,
         });
       } catch (cause) {
+        progress?.stop();
         emit(
           makeEnvelope({
             command: "scan",
@@ -289,28 +295,19 @@ export async function runCli(argv: string[]): Promise<void> {
         );
         return;
       }
+      progress?.stop();
       const byAdapter: Record<string, number> = {};
       for (const s of result.secrets) {
         byAdapter[s.adapter] = (byAdapter[s.adapter] ?? 0) + 1;
       }
-      if (shouldRenderPretty(program)) {
-        process.stdout.write("rotate-cli scan\n\n");
-        process.stdout.write(
-          `Scanned ${result.projectsScanned} project(s) across ${result.teamsScanned.length} team(s)\n\n`,
-        );
-        process.stdout.write(`Mapped secrets: ${result.secrets.length}\n`);
-        const sortedAdapters = Object.entries(byAdapter).sort((a, b) => b[1] - a[1]);
-        for (const [adapter, count] of sortedAdapters) {
-          process.stdout.write(`  ${String(count).padStart(4)}  ${adapter}\n`);
-        }
-        process.stdout.write(`\nSkipped (no mapping): ${result.skipped.length}\n`);
-        process.stdout.write("\nNext:\n");
-        process.stdout.write(
-          "  → rotate-cli who --from-scan            # ownership check every mapped secret\n",
-        );
-        process.stdout.write(
-          `  → rotate-cli apply --from-scan --tag non-sensitive --yes --reason "..."\n`,
-        );
+      if (pretty) {
+        renderScanSummary({
+          projectsScanned: result.projectsScanned,
+          teamsScanned: result.teamsScanned.length,
+          totalSecrets: result.secrets.length,
+          totalSkipped: result.skipped.length,
+          byAdapter,
+        });
         process.exit(EXIT.OK);
       }
       emit(

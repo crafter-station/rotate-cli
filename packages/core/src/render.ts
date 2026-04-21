@@ -334,6 +334,131 @@ function truncate(s: string, max: number): string {
  * - Piped stdout → JSON (cheaper for agents to parse).
  * - Interactive TTY → pretty.
  */
+// ---------------------------------------------------------------------------
+// scan live progress
+// ---------------------------------------------------------------------------
+
+/**
+ * Renders a live, in-place scan progress tracker. The active team gets an
+ * animated spinner line that updates in place; completed teams fall through
+ * as a static line above.
+ *
+ * Not used when stdout is not a TTY — the caller falls back to the JSON
+ * envelope in that case.
+ */
+export function createScanProgressRenderer(): {
+  handle: (event: import("./scan.ts").ScanProgressEvent) => void;
+  stop: () => void;
+} {
+  const spinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+  let frame = 0;
+  let active: {
+    team: string;
+    totalProjects: number;
+    projectsScanned: number;
+    secretsSoFar: number;
+  } | null = null;
+  let lastLineWritten = false;
+
+  const interval = setInterval(() => {
+    frame = (frame + 1) % spinnerFrames.length;
+    if (active) drawActive();
+  }, 80);
+
+  function clearLine(): void {
+    if (lastLineWritten && process.stdout.isTTY) {
+      process.stdout.write("\r\x1b[K");
+      lastLineWritten = false;
+    }
+  }
+
+  function drawActive(): void {
+    if (!active) return;
+    clearLine();
+    const spin = pc.cyan(spinnerFrames[frame]);
+    const progress = pc.dim(`${active.projectsScanned}/${active.totalProjects}`);
+    const secrets = active.secretsSoFar > 0 ? pc.dim(` · ${active.secretsSoFar} secrets`) : "";
+    process.stdout.write(`  ${spin} ${active.team.padEnd(20)} ${progress}${secrets}`);
+    lastLineWritten = true;
+  }
+
+  function writeStaticLine(line: string): void {
+    clearLine();
+    process.stdout.write(`${line}\n`);
+    if (active) drawActive();
+  }
+
+  function handle(event: import("./scan.ts").ScanProgressEvent): void {
+    if (event.kind === "teams-discovered") {
+      writeStaticLine(
+        `${pc.bold("rotate-cli scan")}\n\nScanning ${event.teams.length} scope(s)...\n`,
+      );
+    } else if (event.kind === "team-start") {
+      active = {
+        team: event.team,
+        totalProjects: event.totalProjects,
+        projectsScanned: 0,
+        secretsSoFar: 0,
+      };
+      drawActive();
+    } else if (event.kind === "team-progress") {
+      if (active && active.team === event.team) {
+        active.projectsScanned = event.projectsScanned;
+        active.secretsSoFar = event.secretsSoFar;
+        drawActive();
+      }
+    } else if (event.kind === "team-done") {
+      active = null;
+      const duration =
+        event.durationMs > 1000
+          ? `${(event.durationMs / 1000).toFixed(1)}s`
+          : `${event.durationMs}ms`;
+      writeStaticLine(
+        `  ${pc.green("✓")} ${event.team.padEnd(20)} ${event.projectsScanned} projects ${pc.dim(`· ${event.secretsFound} secrets · ${duration}`)}`,
+      );
+    } else if (event.kind === "team-skipped") {
+      active = null;
+      writeStaticLine(
+        `  ${pc.yellow("⚠")} ${event.team.padEnd(20)} ${pc.dim(`skipped (${event.reason})`)}`,
+      );
+    }
+  }
+
+  function stop(): void {
+    clearInterval(interval);
+    clearLine();
+  }
+
+  return { handle, stop };
+}
+
+export function renderScanSummary(data: {
+  projectsScanned: number;
+  teamsScanned: number;
+  totalSecrets: number;
+  totalSkipped: number;
+  byAdapter: Record<string, number>;
+}): void {
+  print("");
+  print(
+    `${pc.bold("Total:")} ${data.projectsScanned} projects · ${pc.green(String(data.totalSecrets))} mapped · ${pc.dim(`${data.totalSkipped} unmapped`)}`,
+  );
+  print("");
+  print(pc.dim("Mapped by adapter:"));
+  const sorted = Object.entries(data.byAdapter).sort((a, b) => b[1] - a[1]);
+  for (const [adapter, count] of sorted) {
+    print(`  ${String(count).padStart(4)}  ${adapter}`);
+  }
+  print("");
+  print(pc.dim("Next:"));
+  print(
+    `  ${pc.cyan("→")} rotate-cli who --from-scan           ${pc.dim("# ownership check every mapped secret")}`,
+  );
+  print(
+    `  ${pc.cyan("→")} rotate-cli apply --from-scan --yes   ${pc.dim("# bulk rotate your-owned secrets")}`,
+  );
+}
+
 export function shouldRenderPretty(opts: { json?: boolean; pretty?: boolean }): boolean {
   // Explicit flags always win.
   if (opts.json) return false;

@@ -75,7 +75,30 @@ export interface ScanOptions {
   token: string;
   teamSlug?: string; // limit to a single team
   includePublic?: boolean; // NEXT_PUBLIC_* vars (default: false)
+  /** Called on every lifecycle event so the CLI can render live progress. */
+  onProgress?: (event: ScanProgressEvent) => void;
+  /** Parallelism for project env-var fetches within a single team. */
+  concurrency?: number;
 }
+
+export type ScanProgressEvent =
+  | { kind: "teams-discovered"; teams: string[] }
+  | { kind: "team-start"; team: string; totalProjects: number }
+  | {
+      kind: "team-progress";
+      team: string;
+      projectsScanned: number;
+      totalProjects: number;
+      secretsSoFar: number;
+    }
+  | {
+      kind: "team-done";
+      team: string;
+      projectsScanned: number;
+      secretsFound: number;
+      durationMs: number;
+    }
+  | { kind: "team-skipped"; team: string; reason: string };
 
 export interface ScannedSecret extends SecretConfig {
   _scanned: true;
@@ -105,61 +128,112 @@ export async function scanVercel(opts: ScanOptions): Promise<{
     teams.unshift({ slug: "personal" });
   }
 
+  opts.onProgress?.({ kind: "teams-discovered", teams: teams.map((t) => t.slug) });
+
   const secrets: ScannedSecret[] = [];
   const skipped: Array<{ var_name: string; project: string; reason: string }> = [];
   let projectsScanned = 0;
+  const concurrency = opts.concurrency ?? 6;
 
   for (const team of teams) {
+    const teamStarted = Date.now();
     const qs = team.id ? `&teamId=${team.id}` : "";
     const projRes = await fetch(`${VERCEL_BASE}/v9/projects?limit=100${qs}`, { headers });
-    if (!projRes.ok) continue;
+    if (!projRes.ok) {
+      opts.onProgress?.({
+        kind: "team-skipped",
+        team: team.slug,
+        reason: `projects ${projRes.status}`,
+      });
+      continue;
+    }
     const projBody = (await projRes.json()) as {
       projects?: Array<{ id: string; name: string }>;
     };
-    for (const proj of projBody.projects ?? []) {
-      projectsScanned++;
+    const projList = projBody.projects ?? [];
+    opts.onProgress?.({
+      kind: "team-start",
+      team: team.slug,
+      totalProjects: projList.length,
+    });
+
+    let teamProjectsDone = 0;
+    let teamSecretsFound = 0;
+
+    async function scanProject(proj: { id: string; name: string }): Promise<void> {
       const envRes = await fetch(
         `${VERCEL_BASE}/v9/projects/${proj.id}/env?decrypt=false${qs ? `?${qs.slice(1)}` : ""}`,
         { headers },
       );
-      if (!envRes.ok) continue;
-      const envBody = (await envRes.json()) as {
-        envs?: Array<{ id: string; key: string; type: string; target?: string[] }>;
-      };
-      for (const env of envBody.envs ?? []) {
-        if (!opts.includePublic && env.key.startsWith("NEXT_PUBLIC_")) continue;
-        if (env.key === "NODE_ENV" || env.key === "VERCEL_ENV") continue;
-        const adapter = mapVarToAdapter(env.key);
-        if (!adapter) {
-          skipped.push({
-            var_name: env.key,
-            project: proj.name,
-            reason: "no adapter mapping",
-          });
-          continue;
-        }
-        const consumer: ConsumerTargetConfig = {
-          type: "vercel-env",
-          params: {
-            project: proj.id,
-            var_name: env.key,
-            ...(team.id ? { team: team.id } : {}),
-          },
+      if (envRes.ok) {
+        const envBody = (await envRes.json()) as {
+          envs?: Array<{ id: string; key: string; type: string; target?: string[] }>;
         };
-        secrets.push({
-          _scanned: true,
-          _project: proj.name,
-          _team: team.slug,
-          _varType: env.type,
-          id: `${adapter}-${proj.name}-${env.key}`.slice(0, 120),
-          adapter,
-          metadata: {},
-          tags:
-            env.type === "sensitive" || env.type === "secret" ? ["sensitive"] : ["non-sensitive"],
-          consumers: [consumer],
-        });
+        for (const env of envBody.envs ?? []) {
+          if (!opts.includePublic && env.key.startsWith("NEXT_PUBLIC_")) continue;
+          if (env.key === "NODE_ENV" || env.key === "VERCEL_ENV") continue;
+          const adapter = mapVarToAdapter(env.key);
+          if (!adapter) {
+            skipped.push({
+              var_name: env.key,
+              project: proj.name,
+              reason: "no adapter mapping",
+            });
+            continue;
+          }
+          const consumer: ConsumerTargetConfig = {
+            type: "vercel-env",
+            params: {
+              project: proj.id,
+              var_name: env.key,
+              ...(team.id ? { team: team.id } : {}),
+            },
+          };
+          secrets.push({
+            _scanned: true,
+            _project: proj.name,
+            _team: team.slug,
+            _varType: env.type,
+            id: `${adapter}-${proj.name}-${env.key}`.slice(0, 120),
+            adapter,
+            metadata: {},
+            tags:
+              env.type === "sensitive" || env.type === "secret" ? ["sensitive"] : ["non-sensitive"],
+            consumers: [consumer],
+          });
+          teamSecretsFound++;
+        }
       }
+      projectsScanned++;
+      teamProjectsDone++;
+      opts.onProgress?.({
+        kind: "team-progress",
+        team: team.slug,
+        projectsScanned: teamProjectsDone,
+        totalProjects: projList.length,
+        secretsSoFar: teamSecretsFound,
+      });
     }
+
+    // Consume projList in `concurrency`-wide chunks so the dashboard shows
+    // smooth progress instead of blocking on each project sequentially.
+    const queue = [...projList];
+    await Promise.all(
+      Array.from({ length: Math.min(concurrency, queue.length) }, async () => {
+        while (queue.length) {
+          const next = queue.shift();
+          if (next) await scanProject(next);
+        }
+      }),
+    );
+
+    opts.onProgress?.({
+      kind: "team-done",
+      team: team.slug,
+      projectsScanned: teamProjectsDone,
+      secretsFound: teamSecretsFound,
+      durationMs: Date.now() - teamStarted,
+    });
   }
 
   return {
