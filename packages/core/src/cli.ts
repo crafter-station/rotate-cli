@@ -29,8 +29,8 @@ import type { PromptChoice, PromptIO } from "./types.ts";
 export async function runCli(argv: string[]): Promise<void> {
   const program = new Command();
   program
-    .name("rotate")
-    .description("Agent-first secrets rotation CLI")
+    .name("rotate-cli")
+    .description("Agent-first secrets rotation CLI. Local-first, zero servers.")
     .version("0.0.1")
     .option("--json", "force JSON output")
     .option("--pretty", "force human output")

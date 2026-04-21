@@ -2,8 +2,9 @@
   "name": "@rotate/cli",
   "version": "0.0.1",
   "type": "module",
+  "description": "Agent-first secrets rotation CLI. Local-first, zero servers.",
   "bin": {
-    "rotate": "./src/bin.ts"
+    "rotate-cli": "./src/bin.ts"
   },
   "exports": {
     ".": "./src/index.ts"
