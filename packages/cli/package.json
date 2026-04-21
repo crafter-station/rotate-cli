@@ -26,6 +26,10 @@
     "@rotate/adapter-ai-gateway": "workspace:*",
     "@rotate/adapter-upstash": "workspace:*",
     "@rotate/adapter-vercel-kv": "workspace:*",
+    "@rotate/adapter-polar": "workspace:*",
+    "@rotate/adapter-fal": "workspace:*",
+    "@rotate/adapter-elevenlabs": "workspace:*",
+    "@rotate/adapter-turso": "workspace:*",
     "@rotate/consumer-vercel-env": "workspace:*",
     "@rotate/consumer-github-actions": "workspace:*",
     "@rotate/consumer-local-env": "workspace:*"

@@ -11,12 +11,16 @@ import { registerAdapter, registerConsumer } from "@rotate/core";
 import aiGatewayAdapter from "@rotate/adapter-ai-gateway";
 import anthropicAdapter from "@rotate/adapter-anthropic";
 import clerkAdapter from "@rotate/adapter-clerk";
+import elevenLabsAdapter from "@rotate/adapter-elevenlabs";
+import falAdapter from "@rotate/adapter-fal";
 import githubTokenAdapter from "@rotate/adapter-github-token";
 import neonAdapter from "@rotate/adapter-neon";
 import neonConnectionAdapter from "@rotate/adapter-neon-connection";
 import openaiAdapter from "@rotate/adapter-openai";
+import polarAdapter from "@rotate/adapter-polar";
 import resendAdapter from "@rotate/adapter-resend";
 import supabaseAdapter from "@rotate/adapter-supabase";
+import tursoAdapter from "@rotate/adapter-turso";
 import upstashAdapter from "@rotate/adapter-upstash";
 import vercelKvAdapter from "@rotate/adapter-vercel-kv";
 import vercelTokenAdapter from "@rotate/adapter-vercel-token";
@@ -43,6 +47,10 @@ export function registerAll(): void {
   registerAdapter(aiGatewayAdapter);
   registerAdapter(upstashAdapter);
   registerAdapter(vercelKvAdapter);
+  registerAdapter(polarAdapter);
+  registerAdapter(falAdapter);
+  registerAdapter(elevenLabsAdapter);
+  registerAdapter(tursoAdapter);
 
   registerConsumer(vercelEnvConsumer);
   registerConsumer(githubActionsConsumer);
