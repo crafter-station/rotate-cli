@@ -103,3 +103,134 @@ describe("adapter-neon.revoke", () => {
     expect(r.ok).toBe(true);
   });
 });
+
+describe("adapter-neon.ownedBy", () => {
+  test("returns self for a key matching the admin user", async () => {
+    const ctx: AuthContext = { kind: "env", varName: "NEON_API_KEY", token: "admin-self" };
+    const secretValue = `neon_api_key_${"a".repeat(40)}`;
+    mockFetch((url, init) => {
+      const authorization = (init?.headers as Record<string, string>)?.Authorization;
+      if (authorization === "Bearer admin-self" && url.endsWith("/users/me")) {
+        return new Response(JSON.stringify({ id: "user_admin" }), { status: 200 });
+      }
+      if (authorization === "Bearer admin-self" && url.endsWith("/organizations")) {
+        return new Response(JSON.stringify({ organizations: [{ id: "org_self" }] }), {
+          status: 200,
+        });
+      }
+      if (authorization === `Bearer ${secretValue}` && url.endsWith("/users/me")) {
+        return new Response(JSON.stringify({ id: "user_admin" }), { status: 200 });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    const result = await neonAdapter.ownedBy?.(secretValue, ctx);
+
+    expect(result?.verdict).toBe("self");
+    expect(result?.adminCanBill).toBe(true);
+    expect(result?.scope).toBe("user");
+    expect(result?.confidence).toBe("high");
+    expect(result?.strategy).toBe("api-introspection");
+  });
+
+  test("returns other for a key owned elsewhere", async () => {
+    const ctx: AuthContext = { kind: "env", varName: "NEON_API_KEY", token: "admin-other" };
+    const secretValue = `neon_api_key_${"b".repeat(40)}`;
+    mockFetch((url, init) => {
+      const authorization = (init?.headers as Record<string, string>)?.Authorization;
+      if (authorization === "Bearer admin-other" && url.endsWith("/users/me")) {
+        return new Response(JSON.stringify({ id: "user_admin" }), { status: 200 });
+      }
+      if (authorization === "Bearer admin-other" && url.endsWith("/organizations")) {
+        return new Response(JSON.stringify({ organizations: [{ id: "org_self" }] }), {
+          status: 200,
+        });
+      }
+      if (authorization === `Bearer ${secretValue}` && url.endsWith("/users/me")) {
+        return new Response(JSON.stringify({ id: "user_other" }), { status: 200 });
+      }
+      if (authorization === `Bearer ${secretValue}` && url.endsWith("/organizations")) {
+        return new Response(JSON.stringify({ organizations: [{ id: "org_other" }] }), {
+          status: 200,
+        });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    const result = await neonAdapter.ownedBy?.(secretValue, ctx);
+
+    expect(result?.verdict).toBe("other");
+    expect(result?.adminCanBill).toBe(false);
+    expect(result?.scope).toBe("org");
+    expect(result?.confidence).toBe("high");
+  });
+
+  test("returns unknown on 401", async () => {
+    const ctx: AuthContext = { kind: "env", varName: "NEON_API_KEY", token: "admin-401" };
+    const secretValue = `neon_project_key_${"c".repeat(40)}`;
+    mockFetch((url, init) => {
+      const authorization = (init?.headers as Record<string, string>)?.Authorization;
+      if (authorization === "Bearer admin-401" && url.endsWith("/users/me")) {
+        return new Response(JSON.stringify({ id: "user_admin" }), { status: 200 });
+      }
+      if (authorization === "Bearer admin-401" && url.endsWith("/organizations")) {
+        return new Response(JSON.stringify({ organizations: [{ id: "org_self" }] }), {
+          status: 200,
+        });
+      }
+      return new Response("unauthorized", { status: 401 });
+    });
+
+    const result = await neonAdapter.ownedBy?.(secretValue, ctx);
+
+    expect(result?.verdict).toBe("unknown");
+    expect(result?.adminCanBill).toBe(false);
+    expect(result?.confidence).toBe("low");
+  });
+
+  test("returns unknown on network error", async () => {
+    const ctx: AuthContext = { kind: "env", varName: "NEON_API_KEY", token: "admin-network" };
+    const secretValue = `neon_api_key_${"d".repeat(40)}`;
+    mockFetch((url, init) => {
+      const authorization = (init?.headers as Record<string, string>)?.Authorization;
+      if (authorization === "Bearer admin-network" && url.endsWith("/users/me")) {
+        return new Response(JSON.stringify({ id: "user_admin" }), { status: 200 });
+      }
+      if (authorization === "Bearer admin-network" && url.endsWith("/organizations")) {
+        return new Response(JSON.stringify({ organizations: [{ id: "org_self" }] }), {
+          status: 200,
+        });
+      }
+      throw new Error("socket closed");
+    });
+
+    const result = await neonAdapter.ownedBy?.(secretValue, ctx);
+
+    expect(result?.verdict).toBe("unknown");
+    expect(result?.evidence).toContain("network error");
+  });
+
+  test("uses a preloaded endpoint index for Neon connection strings", async () => {
+    const secretValue =
+      "postgres://app:password@ep-cool-darkness-123456-pooler.us-east-2.aws.neon.tech/main?sslmode=require";
+    mockFetch(() => new Response("unexpected", { status: 500 }));
+
+    const result = await neonAdapter.ownedBy?.(secretValue, mockCtx, {
+      preload: {
+        selfOrgIds: ["org_self"],
+        endpointToProject: {
+          "ep-cool-darkness-123456": {
+            projectId: "prj_self",
+            orgId: "org_self",
+          },
+        },
+      },
+    });
+
+    expect(result?.verdict).toBe("self");
+    expect(result?.adminCanBill).toBe(true);
+    expect(result?.scope).toBe("project");
+    expect(result?.strategy).toBe("format-decode");
+    expect(calls).toHaveLength(0);
+  });
+});

@@ -18,6 +18,15 @@ export NEON_API_KEY="napi_..."
 
 The adapter does not use CLI piggyback auth.
 
+## Ownership detection
+
+The adapter supports `ownedBy()` for Neon API keys and Neon-hosted Postgres connection strings.
+
+- Neon API keys are checked with read-only API introspection. Personal keys are matched through `GET /users/me`; org keys use `GET /organizations`; project-scoped keys fall back to `GET /projects`.
+- Neon connection strings are decoded from the hostname endpoint id, such as `ep-cool-darkness-123456`, and matched against a caller-provided cached endpoint-to-project index when available.
+- Expected confidence is high for personal and org API keys, high for connection strings with a warm endpoint index, and medium for project-scoped keys.
+- Ownership checks never mutate Neon state. If Neon returns an auth error, rate limit, provider error, or the secret shape cannot be recognized, the result is `unknown`.
+
 ## Config Example
 
 ```yaml
