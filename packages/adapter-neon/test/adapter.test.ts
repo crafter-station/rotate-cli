@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { getAuthDefinition } from "@rotate/core";
+import { registerAdapter } from "@rotate/core/registry";
 import type { AuthContext, Secret } from "@rotate/core/types";
 import { neonAdapter } from "../src/index.ts";
 
@@ -17,10 +19,12 @@ function mockFetch(responder: (url: string, init?: RequestInit) => Response | Pr
 
 beforeEach(() => {
   calls = [];
+  delete process.env.NEON_API_KEY;
 });
 
 afterEach(() => {
   global.fetch = originalFetch;
+  delete process.env.NEON_API_KEY;
 });
 
 const mockCtx: AuthContext = { kind: "env", varName: "NEON_API_KEY", token: "neon_test" };
@@ -101,6 +105,21 @@ describe("adapter-neon.revoke", () => {
     };
     const r = await neonAdapter.revoke(secret, mockCtx);
     expect(r.ok).toBe(true);
+  });
+});
+
+describe("adapter-neon.auth", () => {
+  test("resolves env auth through shared auth registry", async () => {
+    if (!getAuthDefinition("neon")) registerAdapter(neonAdapter);
+    process.env.NEON_API_KEY = "test-token";
+    const ctx = await neonAdapter.auth();
+    expect(ctx.kind).toBe("env");
+    expect(ctx.token).toBe("test-token");
+  });
+
+  test("registers auth definition with the adapter", () => {
+    if (!getAuthDefinition("neon")) registerAdapter(neonAdapter);
+    expect(getAuthDefinition("neon")?.displayName).toBe("Neon");
   });
 });
 

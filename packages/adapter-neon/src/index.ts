@@ -1,4 +1,4 @@
-import { makeError } from "@rotate/core";
+import { makeError, resolveRegisteredAuth } from "@rotate/core";
 import type {
   Adapter,
   AuthContext,
@@ -8,6 +8,7 @@ import type {
   RotationSpec,
   Secret,
 } from "@rotate/core/types";
+import { neonAuthDefinition } from "./auth.ts";
 
 const NEON_BASE = process.env.NEON_API_URL ?? "https://console.neon.tech/api/v2";
 
@@ -55,13 +56,11 @@ const adminIdentityCache = new Map<string, Promise<AdminIdentity>>();
 
 export const neonAdapter: Adapter = {
   name: "neon",
+  authRef: "neon",
+  authDefinition: neonAuthDefinition,
 
   async auth(): Promise<AuthContext> {
-    const envToken = process.env.NEON_API_KEY;
-    if (envToken) {
-      return { kind: "env", varName: "NEON_API_KEY", token: envToken };
-    }
-    throw new Error("neon auth unavailable: set NEON_API_KEY");
+    return resolveRegisteredAuth("neon");
   },
 
   async create(spec: RotationSpec, ctx: AuthContext): Promise<RotationResult<Secret>> {
