@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { getAuthDefinition } from "@rotate/core";
+import { registerAdapter } from "@rotate/core/registry";
 import type { AuthContext, Secret } from "@rotate/core/types";
 import { vercelTokenAdapter } from "../src/index.ts";
 
@@ -17,10 +19,12 @@ function mockFetch(responder: (url: string, init?: RequestInit) => Response | Pr
 
 beforeEach(() => {
   calls = [];
+  delete process.env.VERCEL_TOKEN;
 });
 
 afterEach(() => {
   global.fetch = originalFetch;
+  delete process.env.VERCEL_TOKEN;
 });
 
 const mockCtx: AuthContext = { kind: "env", varName: "VERCEL_TOKEN", token: "verc_test" };
@@ -232,5 +236,24 @@ describe("adapter-vercel-token.ownedBy", () => {
       strategy: "api-introspection",
     });
     expect(calls).toHaveLength(1);
+  });
+});
+
+describe("adapter-vercel-token.auth", () => {
+  test("resolves env auth through shared auth registry", async () => {
+    if (!getAuthDefinition("vercel-token")) {
+      registerAdapter(vercelTokenAdapter);
+    }
+    process.env.VERCEL_TOKEN = "test-token";
+    const ctx = await vercelTokenAdapter.auth();
+    expect(ctx.kind).toBe("env");
+    expect(ctx.token).toBe("test-token");
+  });
+
+  test("registers auth definition with the adapter", () => {
+    if (!getAuthDefinition("vercel-token")) {
+      registerAdapter(vercelTokenAdapter);
+    }
+    expect(getAuthDefinition("vercel-token")?.displayName).toBe("Vercel");
   });
 });
