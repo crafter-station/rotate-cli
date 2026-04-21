@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { getAuthDefinition } from "@rotate/core/auth";
+import { registerAdapter, resetRegistry } from "@rotate/core/registry";
 import type { AuthContext, Secret } from "@rotate/core/types";
 import { clerkAdapter } from "../src/index.ts";
 
@@ -17,10 +19,15 @@ function mockFetch(responder: (url: string, init?: RequestInit) => Response | Pr
 
 beforeEach(() => {
   calls = [];
+  resetRegistry();
+  registerAdapter(clerkAdapter);
+  delete process.env.CLERK_PLAPI_TOKEN;
 });
 
 afterEach(() => {
   global.fetch = originalFetch;
+  resetRegistry();
+  delete process.env.CLERK_PLAPI_TOKEN;
 });
 
 const mockCtx: AuthContext = { kind: "env", varName: "CLERK_PLAPI_TOKEN", token: "plapi_test" };
@@ -85,6 +92,19 @@ describe("adapter-clerk.verify", () => {
     expect((calls[0]?.init?.headers as Record<string, string>)?.Authorization).toBe(
       "Bearer sk_live_abc",
     );
+  });
+});
+
+describe("adapter-clerk.auth", () => {
+  test("resolves env auth through shared auth registry", async () => {
+    process.env.CLERK_PLAPI_TOKEN = "test-token";
+    const ctx = await clerkAdapter.auth();
+    expect(ctx.kind).toBe("env");
+    expect(ctx.token).toBe("test-token");
+  });
+
+  test("registers auth definition with the adapter", () => {
+    expect(getAuthDefinition("clerk")?.displayName).toBe("Clerk");
   });
 });
 

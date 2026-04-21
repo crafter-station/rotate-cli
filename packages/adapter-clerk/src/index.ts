@@ -1,21 +1,5 @@
-/**
- * @rotate/adapter-clerk — Clerk secret key rotation.
- *
- * Auth: CLI piggyback. Reads Clerk CLI auth token.
- *   Expected file: ~/.clerk/auth.json  { "token": "plapi_live_..." }
- *   Fallback env var: CLERK_PLAPI_TOKEN
- *
- * Operations:
- *   - create: POST PLAPI /v1/instances/{instance_id}/api_keys
- *   - verify: GET  PLAPI /v1/me  (must succeed with the NEW key to return ok)
- *   - revoke: DELETE PLAPI /v1/instances/{instance_id}/api_keys/{key_id}
- *   - list:   GET    PLAPI /v1/instances/{instance_id}/api_keys
- */
-
-import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
 import { makeError } from "@rotate/core";
+import { resolveRegisteredAuth } from "@rotate/core/auth";
 import type {
   Adapter,
   AuthContext,
@@ -25,6 +9,7 @@ import type {
   RotationSpec,
   Secret,
 } from "@rotate/core/types";
+import { clerkAuthDefinition } from "./auth.ts";
 
 const PLAPI_BASE = process.env.CLERK_PLAPI_URL ?? "https://api.clerk.com";
 
@@ -44,24 +29,11 @@ export interface ClerkApiKey {
 
 export const clerkAdapter: Adapter = {
   name: "clerk",
+  authRef: "clerk",
+  authDefinition: clerkAuthDefinition,
 
   async auth(): Promise<AuthContext> {
-    const envToken = process.env.CLERK_PLAPI_TOKEN;
-    if (envToken) {
-      return { kind: "env", varName: "CLERK_PLAPI_TOKEN", token: envToken };
-    }
-    const path = join(homedir(), ".clerk", "auth.json");
-    if (existsSync(path)) {
-      try {
-        const data = JSON.parse(readFileSync(path, "utf8")) as { token?: string };
-        if (data.token) {
-          return { kind: "cli-piggyback", tool: "clerk", tokenPath: path, token: data.token };
-        }
-      } catch {
-        /* fallthrough */
-      }
-    }
-    throw new Error("clerk auth unavailable: run `clerk login` or set CLERK_PLAPI_TOKEN");
+    return resolveRegisteredAuth("clerk");
   },
 
   async create(spec: RotationSpec, ctx: AuthContext): Promise<RotationResult<Secret>> {
