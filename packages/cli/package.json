@@ -1,0 +1,32 @@
+{
+  "name": "@rotate/cli",
+  "version": "0.0.1",
+  "type": "module",
+  "bin": {
+    "rotate": "./src/bin.ts"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@rotate/core": "workspace:*",
+    "@rotate/adapter-clerk": "workspace:*",
+    "@rotate/adapter-openai": "workspace:*",
+    "@rotate/adapter-anthropic": "workspace:*",
+    "@rotate/adapter-github-token": "workspace:*",
+    "@rotate/adapter-resend": "workspace:*",
+    "@rotate/adapter-supabase": "workspace:*",
+    "@rotate/adapter-neon": "workspace:*",
+    "@rotate/adapter-neon-connection": "workspace:*",
+    "@rotate/adapter-vercel-token": "workspace:*",
+    "@rotate/adapter-ai-gateway": "workspace:*",
+    "@rotate/adapter-upstash": "workspace:*",
+    "@rotate/consumer-vercel-env": "workspace:*",
+    "@rotate/consumer-github-actions": "workspace:*",
+    "@rotate/consumer-local-env": "workspace:*"
+  }
+}
