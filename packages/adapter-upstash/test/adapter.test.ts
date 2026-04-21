@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import type { AuthContext, Secret } from "@rotate/core/types";
 import { upstashAdapter } from "../src/index.ts";
 
@@ -110,3 +111,189 @@ describe("adapter-upstash.revoke", () => {
     expect(calls).toHaveLength(0);
   });
 });
+
+describe("adapter-upstash.ownedBy", () => {
+  test("returns self when co-located REST URL matches the admin index", async () => {
+    mockFetch((url) => {
+      if (url.endsWith("/redis/databases")) {
+        return json([
+          {
+            database_id: "db_123",
+            endpoint: "relaxed-puma-43216.upstash.io",
+            rest_token: "AXW_ASQgOTZh_self_token_value_1234567890=",
+            read_only_rest_token: "AXW_ASQgOTZh_readonly_token_value_123456=",
+            user_email: "dev@example.com",
+          },
+        ]);
+      }
+      if (url.endsWith("/teams")) return json([]);
+      return new Response("not found", { status: 404 });
+    });
+
+    const result = await upstashAdapter.ownedBy?.(
+      "AXW_ASQgOTZh_self_token_value_1234567890=",
+      mockCtx,
+      {
+        coLocatedVars: {
+          UPSTASH_REDIS_REST_URL: "https://relaxed-puma-43216.upstash.io",
+        },
+      },
+    );
+
+    expect(result?.verdict).toBe("self");
+    expect(result?.adminCanBill).toBe(true);
+    expect(result?.confidence).toBe("high");
+    expect(result?.strategy).toBe("format-decode");
+    expect(calls.map((call) => call.url)).toEqual([
+      "https://api.upstash.com/v2/redis/databases",
+      "https://api.upstash.com/v2/teams",
+    ]);
+  });
+
+  test("returns other when REST URL endpoint is outside the admin index", async () => {
+    mockFetch((url) => {
+      if (url.endsWith("/redis/databases")) return json([]);
+      if (url.endsWith("/teams")) return json([]);
+      return new Response("not found", { status: 404 });
+    });
+
+    const result = await upstashAdapter.ownedBy?.("not-a-token", mockCtx, {
+      coLocatedVars: {
+        KV_REST_API_URL: "https://relaxed-puma-43216.upstash.io",
+      },
+    });
+
+    expect(result?.verdict).toBe("other");
+    expect(result?.adminCanBill).toBe(false);
+    expect(result?.confidence).toBe("high");
+  });
+
+  test("returns unknown on 401 while building the ownership index", async () => {
+    mockFetch(() => new Response("unauthorized", { status: 401 }));
+
+    const result = await upstashAdapter.ownedBy?.(
+      "AXW_ASQgOTZh_unknown_token_value_1234567890=",
+      mockCtx,
+    );
+
+    expect(result?.verdict).toBe("unknown");
+    expect(result?.adminCanBill).toBe(false);
+    expect(result?.confidence).toBe("low");
+  });
+
+  test("returns unknown on network error while building the ownership index", async () => {
+    mockFetch(() => {
+      throw new Error("offline");
+    });
+
+    const result = await upstashAdapter.ownedBy?.(
+      "AXW_ASQgOTZh_unknown_token_value_1234567890=",
+      mockCtx,
+    );
+
+    expect(result?.verdict).toBe("unknown");
+    expect(result?.adminCanBill).toBe(false);
+    expect(result?.confidence).toBe("low");
+  });
+
+  test("matches REST and read-only tokens from preload by hash", async () => {
+    const preload = {
+      dbByEndpoint: {
+        "relaxed-puma-43216.upstash.io": {
+          id: "db_123",
+          endpoint: "relaxed-puma-43216.upstash.io",
+          userEmail: "dev@example.com",
+        },
+      },
+      tokenHashToEndpoint: {
+        [sha256("AXW_ASQgOTZh_self_token_value_1234567890=")]: "relaxed-puma-43216.upstash.io",
+        [sha256("AXW_ASQgOTZh_readonly_token_value_123456=")]: "relaxed-puma-43216.upstash.io",
+      },
+      selfEmails: ["dev@example.com"],
+      selfTeamIds: [],
+    };
+
+    const result = await upstashAdapter.ownedBy?.(
+      "AXW_ASQgOTZh_readonly_token_value_123456=",
+      mockCtx,
+      { preload },
+    );
+
+    expect(result?.verdict).toBe("self");
+    expect(result?.strategy).toBe("list-match");
+    expect(calls).toHaveLength(0);
+  });
+
+  test("uses Vercel KV redis URL aliases for endpoint ownership", async () => {
+    const result = await upstashAdapter.ownedBy?.("rest token stored elsewhere", mockCtx, {
+      coLocatedVars: {
+        REDIS_URL: "rediss://default:password@relaxed-puma-43216.upstash.io:6379",
+      },
+      preload: {
+        dbByEndpoint: {
+          "relaxed-puma-43216.upstash.io": {
+            id: "db_123",
+            endpoint: "relaxed-puma-43216.upstash.io",
+            teamId: "team_123",
+          },
+        },
+        tokenHashToEndpoint: {},
+        selfEmails: ["dev@example.com"],
+        selfTeamIds: ["team_123"],
+      },
+    });
+
+    expect(result?.verdict).toBe("self");
+    expect(result?.scope).toBe("team");
+    expect(result?.strategy).toBe("format-decode");
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("adapter-upstash.preloadOwnership", () => {
+  test("builds endpoint and token hash indexes", async () => {
+    mockFetch((url) => {
+      if (url.endsWith("/redis/databases")) {
+        return json([
+          {
+            database_id: "db_123",
+            endpoint: "relaxed-puma-43216.upstash.io",
+            rest_token: "AXW_ASQgOTZh_self_token_value_1234567890=",
+            read_only_rest_token: "AXW_ASQgOTZh_readonly_token_value_123456=",
+            team_id: "team_123",
+            user_email: "dev@example.com",
+          },
+        ]);
+      }
+      if (url.endsWith("/teams")) {
+        return json([{ team_id: "team_123" }]);
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    const preload = await upstashAdapter.preloadOwnership?.(mockCtx);
+
+    expect(preload?.dbByEndpoint).toEqual({
+      "relaxed-puma-43216.upstash.io": {
+        id: "db_123",
+        endpoint: "relaxed-puma-43216.upstash.io",
+        teamId: "team_123",
+        userEmail: "dev@example.com",
+      },
+    });
+    expect(preload?.tokenHashToEndpoint).toEqual({
+      [sha256("AXW_ASQgOTZh_self_token_value_1234567890=")]: "relaxed-puma-43216.upstash.io",
+      [sha256("AXW_ASQgOTZh_readonly_token_value_123456=")]: "relaxed-puma-43216.upstash.io",
+    });
+    expect(preload?.selfTeamIds).toEqual(["team_123"]);
+    expect(preload?.selfEmails).toEqual(["dev@example.com"]);
+  });
+});
+
+function json(value: unknown): Response {
+  return new Response(JSON.stringify(value), { status: 200 });
+}
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}

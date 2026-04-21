@@ -1,7 +1,11 @@
+import { createHash } from "node:crypto";
 import { makeError } from "@rotate/core";
 import type {
   Adapter,
   AuthContext,
+  OwnershipOptions,
+  OwnershipPreload,
+  OwnershipResult,
   RotationResult,
   RotationSpec,
   Secret,
@@ -20,6 +24,28 @@ interface UpstashResetPasswordResponse {
   lastPasswordRotation?: string;
 }
 
+interface UpstashTeam {
+  id?: string;
+  team_id?: string;
+  teamId?: string;
+}
+
+interface UpstashOwnershipDb {
+  id: string;
+  endpoint: string;
+  teamId?: string | null;
+  userEmail?: string;
+}
+
+interface UpstashOwnershipPreload extends OwnershipPreload {
+  dbByEndpoint?: Record<string, UpstashOwnershipDb>;
+  tokenHashToEndpoint?: Record<string, string>;
+  selfTeamIds?: string[];
+  selfEmails?: string[];
+  errorCode?: string;
+  errorEvidence?: string;
+}
+
 interface UpstashDatabase {
   database_id?: string;
   id?: string;
@@ -34,6 +60,13 @@ interface UpstashDatabase {
   createdAt?: string;
   rest_token?: string;
   restToken?: string;
+  read_only_rest_token?: string;
+  readOnlyRestToken?: string;
+  endpoint?: string;
+  team_id?: string | null;
+  teamId?: string | null;
+  user_email?: string;
+  userEmail?: string;
   last_password_rotation?: string;
   lastPasswordRotation?: string;
 }
@@ -171,6 +204,100 @@ export const upstashAdapter: Adapter = {
       }),
     };
   },
+
+  async preloadOwnership(ctx: AuthContext): Promise<OwnershipPreload> {
+    return preloadUpstashOwnership(ctx);
+  },
+
+  async ownedBy(
+    secretValue: string,
+    ctx: AuthContext,
+    opts: OwnershipOptions = {},
+  ): Promise<OwnershipResult> {
+    try {
+      const preload = asOwnershipPreload(opts.preload ?? (await preloadUpstashOwnership(ctx)));
+      if (preload.errorCode) {
+        return unknownOwnership(preload.errorEvidence ?? "ownership index unavailable", "low");
+      }
+
+      const restEndpoint = endpointFromRestUrl(
+        opts.coLocatedVars?.UPSTASH_REDIS_REST_URL ??
+          opts.coLocatedVars?.KV_REST_API_URL ??
+          (looksLikeUpstashRestUrl(secretValue) ? secretValue : undefined),
+      );
+      if (restEndpoint) {
+        const db = preload.dbByEndpoint?.[restEndpoint];
+        if (!db) {
+          return {
+            verdict: "other",
+            adminCanBill: false,
+            confidence: "high",
+            evidence: `Upstash Redis endpoint ${restEndpoint} is not visible to the authenticated admin`,
+            strategy: "format-decode",
+          };
+        }
+        return ownershipFromDb(
+          db,
+          preload,
+          "format-decode",
+          `Upstash Redis endpoint ${restEndpoint}`,
+        );
+      }
+
+      if (looksLikeUpstashRestToken(secretValue)) {
+        const endpoint = preload.tokenHashToEndpoint?.[sha256(secretValue)];
+        if (!endpoint) {
+          return unknownOwnership(
+            "REST token did not match the authenticated admin's Upstash Redis index",
+            "medium",
+          );
+        }
+        const db = preload.dbByEndpoint?.[endpoint];
+        if (!db) {
+          return unknownOwnership("REST token matched an incomplete Upstash Redis index", "low");
+        }
+        return ownershipFromDb(
+          db,
+          preload,
+          "list-match",
+          "REST token hash matched Upstash Redis index",
+        );
+      }
+
+      const redisEndpoint = endpointFromRedisUrl(
+        opts.coLocatedVars?.KV_URL ??
+          opts.coLocatedVars?.REDIS_URL ??
+          (looksLikeRedisUrl(secretValue) ? secretValue : undefined),
+      );
+      if (redisEndpoint) {
+        const db = preload.dbByEndpoint?.[redisEndpoint];
+        if (!db) {
+          return {
+            verdict: "other",
+            adminCanBill: false,
+            confidence: "high",
+            evidence: `Upstash Redis endpoint ${redisEndpoint} is not visible to the authenticated admin`,
+            strategy: "format-decode",
+          };
+        }
+        return ownershipFromDb(
+          db,
+          preload,
+          "format-decode",
+          `Upstash Redis endpoint ${redisEndpoint}`,
+        );
+      }
+
+      return unknownOwnership("secret shape does not expose an Upstash Redis owner", "low");
+    } catch (cause) {
+      const error = cause instanceof Error ? cause : new Error(String(cause));
+      networkError(error);
+      return unknownOwnership(
+        "ownership check failed before Upstash Redis ownership could be determined",
+        "low",
+      );
+    }
+  },
 };
 
 export default upstashAdapter;
@@ -241,4 +368,173 @@ function fromResponse(res: Response, op: string) {
   return makeError("provider_error", `upstash ${op}: ${res.status}`, UPSTASH_PROVIDER, {
     retryable: false,
   });
+}
+
+async function preloadUpstashOwnership(ctx: AuthContext): Promise<UpstashOwnershipPreload> {
+  const [email] = splitAuthToken(ctx.token);
+  const res = await request(`${UPSTASH_API_BASE}/redis/databases`, {
+    headers: authHeaders(ctx),
+  });
+  if (res instanceof Error) {
+    const error = networkError(res);
+    return {
+      errorCode: error.code,
+      errorEvidence: "network error while building Upstash Redis ownership index",
+    };
+  }
+  if (!res.ok) {
+    const error = fromResponse(res, "preloadOwnership");
+    return {
+      errorCode: error.code,
+      errorEvidence: ownershipEvidenceForError(error.code),
+    };
+  }
+
+  let data: UpstashDatabase[];
+  try {
+    data = (await res.json()) as UpstashDatabase[];
+  } catch (cause) {
+    const error = makeError(
+      "provider_error",
+      "upstash preloadOwnership: invalid JSON",
+      UPSTASH_PROVIDER,
+      {
+        cause,
+      },
+    );
+    return {
+      errorCode: error.code,
+      errorEvidence: "provider unavailable",
+    };
+  }
+
+  const selfTeamIds = await loadSelfTeamIds(ctx);
+  const selfEmails = email ? [email.toLowerCase()] : [];
+  const dbByEndpoint: Record<string, UpstashOwnershipDb> = {};
+  const tokenHashToEndpoint: Record<string, string> = {};
+
+  for (const database of data) {
+    const id = database.database_id ?? database.id;
+    const endpoint = normalizeEndpoint(database.endpoint);
+    if (!id || !endpoint) continue;
+
+    dbByEndpoint[endpoint] = {
+      id,
+      endpoint,
+      teamId: database.team_id ?? database.teamId ?? null,
+      userEmail: database.user_email ?? database.userEmail,
+    };
+
+    const restToken = database.rest_token ?? database.restToken;
+    const readOnlyRestToken = database.read_only_rest_token ?? database.readOnlyRestToken;
+    if (restToken) tokenHashToEndpoint[sha256(restToken)] = endpoint;
+    if (readOnlyRestToken) tokenHashToEndpoint[sha256(readOnlyRestToken)] = endpoint;
+  }
+
+  return {
+    dbByEndpoint,
+    tokenHashToEndpoint,
+    selfTeamIds,
+    selfEmails,
+  };
+}
+
+async function loadSelfTeamIds(ctx: AuthContext): Promise<string[]> {
+  const res = await request(`${UPSTASH_API_BASE}/teams`, {
+    headers: authHeaders(ctx),
+  });
+  if (res instanceof Error || !res.ok) return [];
+  try {
+    const data = (await res.json()) as UpstashTeam[];
+    return data.flatMap((team) => {
+      const id = team.team_id ?? team.teamId ?? team.id;
+      return id ? [id] : [];
+    });
+  } catch {
+    return [];
+  }
+}
+
+function asOwnershipPreload(preload: OwnershipPreload): UpstashOwnershipPreload {
+  return preload as UpstashOwnershipPreload;
+}
+
+function ownershipFromDb(
+  db: UpstashOwnershipDb,
+  preload: UpstashOwnershipPreload,
+  strategy: OwnershipResult["strategy"],
+  evidencePrefix: string,
+): OwnershipResult {
+  const self = isSelfOwned(db, preload);
+  return {
+    verdict: self ? "self" : "other",
+    adminCanBill: self,
+    scope: db.teamId ? "team" : "user",
+    confidence: "high",
+    evidence: self
+      ? `${evidencePrefix} matched a database owned by the authenticated Upstash admin`
+      : `${evidencePrefix} matched a database outside the authenticated Upstash admin ownership set`,
+    strategy,
+  };
+}
+
+function isSelfOwned(db: UpstashOwnershipDb, preload: UpstashOwnershipPreload): boolean {
+  if (db.teamId && preload.selfTeamIds?.includes(db.teamId)) return true;
+  const dbEmail = db.userEmail?.toLowerCase();
+  if (dbEmail && preload.selfEmails?.includes(dbEmail)) return true;
+  return false;
+}
+
+function unknownOwnership(
+  evidence: string,
+  confidence: OwnershipResult["confidence"],
+): OwnershipResult {
+  return {
+    verdict: "unknown",
+    adminCanBill: false,
+    confidence,
+    evidence,
+    strategy: "list-match",
+  };
+}
+
+function ownershipEvidenceForError(code: string): string {
+  if (code === "auth_failed") return "auth failed while building Upstash Redis ownership index";
+  if (code === "rate_limited") return "rate limited while building Upstash Redis ownership index";
+  if (code === "provider_error") return "provider unavailable";
+  return "ownership index unavailable";
+}
+
+function looksLikeUpstashRestUrl(value: string): boolean {
+  return /^https?:\/\/[a-z]+-[a-z]+-\d+\.upstash\.io\b/i.test(value);
+}
+
+function endpointFromRestUrl(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const match = value.match(/^https?:\/\/([a-z]+-[a-z]+-\d+)\.upstash\.io\b/i);
+  return match?.[1] ? `${match[1].toLowerCase()}.upstash.io` : undefined;
+}
+
+function looksLikeRedisUrl(value: string): boolean {
+  return value.startsWith("redis://") || value.startsWith("rediss://");
+}
+
+function endpointFromRedisUrl(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const match = value.match(/@([a-z]+-[a-z]+-\d+)\.upstash\.io\b/i);
+  return match?.[1] ? `${match[1].toLowerCase()}.upstash.io` : undefined;
+}
+
+function normalizeEndpoint(endpoint: string | undefined): string | undefined {
+  if (!endpoint) return undefined;
+  const match = endpoint.match(/^([a-z]+-[a-z]+-\d+)\.upstash\.io$/i);
+  return match?.[1] ? `${match[1].toLowerCase()}.upstash.io` : undefined;
+}
+
+function looksLikeUpstashRestToken(value: string): boolean {
+  return /^[A-Za-z0-9_=+/-]{40,}$/.test(value);
+}
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
 }
