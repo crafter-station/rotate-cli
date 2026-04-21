@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
+import { getAuthDefinition } from "@rotate/core";
+import { registerAdapter, resetRegistry } from "@rotate/core/registry";
 import type { AuthContext, Secret } from "@rotate/core/types";
 import { upstashAdapter } from "../src/index.ts";
 
@@ -18,10 +20,17 @@ function mockFetch(responder: (url: string, init?: RequestInit) => Response | Pr
 
 beforeEach(() => {
   calls = [];
+  resetRegistry();
+  registerAdapter(upstashAdapter);
+  delete process.env.UPSTASH_EMAIL;
+  delete process.env.UPSTASH_API_KEY;
 });
 
 afterEach(() => {
   global.fetch = originalFetch;
+  resetRegistry();
+  delete process.env.UPSTASH_EMAIL;
+  delete process.env.UPSTASH_API_KEY;
 });
 
 const mockCtx: AuthContext = {
@@ -109,6 +118,20 @@ describe("adapter-upstash.revoke", () => {
     const r = await upstashAdapter.revoke(secret, mockCtx);
     expect(r.ok).toBe(true);
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe("adapter-upstash.auth", () => {
+  test("resolves env auth through shared auth registry", async () => {
+    process.env.UPSTASH_EMAIL = "dev@example.com";
+    process.env.UPSTASH_API_KEY = "test-key";
+    const ctx = await upstashAdapter.auth();
+    expect(ctx.kind).toBe("env");
+    expect(ctx.token).toBe("dev@example.com:test-key");
+  });
+
+  test("registers auth definition with the adapter", () => {
+    expect(getAuthDefinition("upstash")?.displayName).toBe("Upstash");
   });
 });
 

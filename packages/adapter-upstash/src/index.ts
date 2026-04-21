@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { makeError } from "@rotate/core";
+import { makeError, resolveRegisteredAuth } from "@rotate/core";
 import type {
   Adapter,
   AuthContext,
@@ -10,6 +10,7 @@ import type {
   RotationSpec,
   Secret,
 } from "@rotate/core/types";
+import { upstashAuthDefinition } from "./auth.ts";
 
 const UPSTASH_API_BASE = process.env.UPSTASH_API_URL ?? "https://api.upstash.com/v2";
 const UPSTASH_PROVIDER = "upstash";
@@ -73,18 +74,11 @@ interface UpstashDatabase {
 
 export const upstashAdapter: Adapter = {
   name: UPSTASH_PROVIDER,
+  authRef: UPSTASH_PROVIDER,
+  authDefinition: upstashAuthDefinition,
 
   async auth(): Promise<AuthContext> {
-    const email = process.env.UPSTASH_EMAIL;
-    const apiKey = process.env.UPSTASH_API_KEY;
-    if (email && apiKey) {
-      return {
-        kind: "env",
-        varName: "UPSTASH_EMAIL,UPSTASH_API_KEY",
-        token: `${email}:${apiKey}`,
-      };
-    }
-    throw new Error("upstash auth unavailable: set UPSTASH_EMAIL and UPSTASH_API_KEY");
+    return resolveRegisteredAuth(UPSTASH_PROVIDER);
   },
 
   async create(spec: RotationSpec, ctx: AuthContext): Promise<RotationResult<Secret>> {
