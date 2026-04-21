@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { getAuthDefinition, registerAdapter, resetRegistry } from "@rotate/core";
 import type { AuthContext, Secret } from "@rotate/core/types";
 import { githubTokenAdapter } from "../src/index.ts";
 
@@ -17,10 +18,15 @@ function mockFetch(responder: (url: string, init?: RequestInit) => Response | Pr
 
 beforeEach(() => {
   calls = [];
+  resetRegistry();
+  registerAdapter(githubTokenAdapter);
+  delete process.env.GITHUB_TOKEN;
 });
 
 afterEach(() => {
   global.fetch = originalFetch;
+  resetRegistry();
+  delete process.env.GITHUB_TOKEN;
 });
 
 const mockCtx: AuthContext = { kind: "env", varName: "GITHUB_TOKEN", token: "jwt_test" };
@@ -106,6 +112,19 @@ describe("adapter-github-token.revoke", () => {
     };
     const r = await githubTokenAdapter.revoke(secret, mockCtx);
     expect(r.ok).toBe(true);
+  });
+});
+
+describe("adapter-github-token.auth", () => {
+  test("resolves env auth through shared auth registry", async () => {
+    process.env.GITHUB_TOKEN = "test-token";
+    const ctx = await githubTokenAdapter.auth();
+    expect(ctx.kind).toBe("env");
+    expect(ctx.token).toBe("test-token");
+  });
+
+  test("registers auth definition with the adapter", () => {
+    expect(getAuthDefinition("github-token")?.displayName).toBe("GitHub");
   });
 });
 

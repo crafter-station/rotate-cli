@@ -1,8 +1,4 @@
-import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
-import { makeError } from "@rotate/core";
+import { makeError, resolveRegisteredAuth } from "@rotate/core";
 import type {
   Adapter,
   AuthContext,
@@ -11,6 +7,7 @@ import type {
   RotationSpec,
   Secret,
 } from "@rotate/core/types";
+import { githubTokenAuthDefinition } from "./auth.ts";
 
 const GITHUB_BASE = githubBaseUrl();
 
@@ -43,23 +40,12 @@ interface GitHubInstallationMeta {
 }
 
 export const githubTokenAdapter: Adapter = {
-  name: "github",
+  name: "github-token",
+  authRef: "github-token",
+  authDefinition: githubTokenAuthDefinition,
 
   async auth(): Promise<AuthContext> {
-    const ghToken = readGhToken();
-    if (ghToken) {
-      return {
-        kind: "cli-piggyback",
-        tool: "gh",
-        tokenPath: firstExistingGhPath(),
-        token: ghToken,
-      };
-    }
-    const envToken = process.env.GITHUB_TOKEN;
-    if (envToken) {
-      return { kind: "env", varName: "GITHUB_TOKEN", token: envToken };
-    }
-    throw new Error("github auth unavailable: run `gh auth login` or set GITHUB_TOKEN");
+    return resolveRegisteredAuth("github-token");
   },
 
   async create(spec: RotationSpec, ctx: AuthContext): Promise<RotationResult<Secret>> {
@@ -298,18 +284,6 @@ export const githubTokenAdapter: Adapter = {
 
 export default githubTokenAdapter;
 
-function readGhToken(): string | null {
-  try {
-    const output = execFileSync("gh", ["auth", "token"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-    return output.length > 0 ? output : null;
-  } catch {
-    return null;
-  }
-}
-
 function githubBaseUrl(): string {
   if (process.env.GITHUB_API_URL) return process.env.GITHUB_API_URL;
   const host = process.env.GH_HOST;
@@ -317,22 +291,6 @@ function githubBaseUrl(): string {
   const normalized = host.replace(/^https?:\/\//, "").replace(/\/$/, "");
   if (normalized === "github.com") return "https://api.github.com";
   return `https://${normalized}/api/v3`;
-}
-
-function firstExistingGhPath(): string | undefined {
-  for (const path of ghAuthPaths()) {
-    if (existsSync(path)) return path;
-  }
-  return undefined;
-}
-
-function ghAuthPaths(): string[] {
-  const home = homedir();
-  return [
-    join(home, ".config", "gh", "hosts.yml"),
-    join(home, ".github", "hosts.yml"),
-    join(home, ".config", "github", "hosts.yml"),
-  ];
 }
 
 function tokenRequestBody(metadata: Record<string, string>): Record<string, unknown> {
