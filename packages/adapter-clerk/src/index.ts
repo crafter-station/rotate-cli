@@ -37,62 +37,83 @@ export const clerkAdapter: Adapter = {
   },
 
   async preloadOwnership(ctx: AuthContext) {
-    // Enumerate the Clerk instances the auth token can see, and for each
-    // pull the FAPI host + JWKS key ids. These two sets are what ownedBy()
-    // checks against to decide self/other.
+    // Enumerate the Clerk applications the Platform API token can see via
+    // GET /v1/platform/applications (needs a Platform API access token —
+    // `ak_...` or `plapi_...` — NOT a secret key or BAPI key).
     //
-    // PLAPI endpoint: GET /v1/instances lists every instance the caller owns.
-    // We intentionally fan out in parallel — for a typical Clerk account
-    // (1-5 instances) this is <1s, and the preload is only computed once
-    // per `who` invocation anyway.
+    // Each application has `instances[]` with a `publishable_key` (pk_live_*
+    // or pk_test_*). Decoding the base64 after the prefix yields the FAPI
+    // host (e.g. `fine-bunny-57.clerk.accounts.dev` for dev, or
+    // `clerk.myapp.com` for production). Those are the hosts ownedBy()
+    // compares against.
+    //
+    // Throws on 401/403 so preloadOwnershipForSecrets shows preload-failed
+    // instead of silently returning empty sets (which would mask the auth
+    // issue as 95 useless "unknown" verdicts).
     const knownFapiHosts = new Set<string>();
     const knownKids = new Set<string>();
-    try {
-      const res = await fetch(`${PLAPI_BASE}/v1/instances`, {
-        headers: { Authorization: `Bearer ${ctx.token}` },
-      });
-      if (!res.ok) return { knownFapiHosts, knownKids };
-      const body = (await res.json()) as Array<{
-        id: string;
-        home_origin?: string;
-        frontend_api_url?: string;
-        development?: boolean;
-      }>;
-      const instances = Array.isArray(body) ? body : [];
-      // For each instance: extract fapi_host from frontend_api_url, fetch
-      // JWKS to learn its kids. JWKS is public — no auth needed.
-      await Promise.all(
-        instances.map(async (inst) => {
-          if (inst.frontend_api_url) {
-            try {
-              const u = new URL(inst.frontend_api_url);
-              knownFapiHosts.add(u.host.toLowerCase());
-            } catch {
-              /* ignore malformed URL */
-            }
-          }
-          // JWKS lives at `<frontend_api_url>/.well-known/jwks.json`
-          if (inst.frontend_api_url) {
-            try {
-              const jwksRes = await fetch(
-                `${inst.frontend_api_url.replace(/\/$/, "")}/.well-known/jwks.json`,
-              );
-              if (jwksRes.ok) {
-                const jwks = (await jwksRes.json()) as { keys?: Array<{ kid?: string }> };
-                for (const k of jwks.keys ?? []) {
-                  if (typeof k.kid === "string") knownKids.add(k.kid);
-                }
-              }
-            } catch {
-              /* ignore network failure */
-            }
-          }
-        }),
+
+    const res = await fetch(`${PLAPI_BASE}/v1/platform/applications`, {
+      headers: { Authorization: `Bearer ${ctx.token}` },
+    });
+    if (res.status === 401 || res.status === 403) {
+      const body = await res.text();
+      throw new Error(
+        `Clerk PLAPI rejected token (${res.status}). Need a Platform API access token (ak_... or plapi_...) from dashboard.clerk.com → Settings → API keys → Platform API. ${body.slice(0, 120)}`,
       );
-      return { knownFapiHosts, knownKids };
-    } catch {
-      return { knownFapiHosts, knownKids };
     }
+    if (!res.ok) return { knownFapiHosts, knownKids };
+
+    const apps = (await res.json()) as Array<{
+      application_id?: string;
+      name?: string;
+      instances?: Array<{
+        instance_id?: string;
+        environment_type?: string;
+        publishable_key?: string;
+      }>;
+    }>;
+
+    // Collect all publishable keys so we can decode their FAPI hosts. The
+    // JWKS fetch per-instance is public (no auth) — do it in parallel so
+    // large accounts preload in <2s.
+    const pkList: Array<{ pk: string; host: string }> = [];
+    for (const app of Array.isArray(apps) ? apps : []) {
+      for (const inst of app.instances ?? []) {
+        const pk = inst.publishable_key;
+        if (!pk) continue;
+        const decoded = decodeFapi(pk);
+        if (decoded) {
+          knownFapiHosts.add(decoded.host);
+          pkList.push({ pk, host: decoded.host });
+        }
+      }
+    }
+
+    // Fetch JWKS per unique host in parallel. JWKS gives us `kid` fingerprints
+    // which are the secondary way ownedBy() confirms self-ownership when the
+    // sibling publishable key isn't co-located.
+    const uniqueHosts = [...new Set(pkList.map((p) => `https://${p.host}/.well-known/jwks.json`))];
+    await Promise.all(
+      uniqueHosts.map(async (url) => {
+        const ctrl = new AbortController();
+        const tid = setTimeout(() => ctrl.abort(), 5_000);
+        try {
+          const jwksRes = await fetch(url, { signal: ctrl.signal });
+          if (!jwksRes.ok) return;
+          const jwks = (await jwksRes.json()) as { keys?: Array<{ kid?: string }> };
+          for (const k of jwks.keys ?? []) {
+            if (typeof k.kid === "string") knownKids.add(k.kid);
+          }
+        } catch {
+          /* ignore per-host failure — partial index still useful */
+        } finally {
+          clearTimeout(tid);
+        }
+      }),
+    );
+
+    return { knownFapiHosts, knownKids };
   },
 
   async create(spec: RotationSpec, ctx: AuthContext): Promise<RotationResult<Secret>> {
