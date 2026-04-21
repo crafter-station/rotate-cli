@@ -1,4 +1,4 @@
-import { makeError } from "@rotate/core";
+import { makeError, resolveRegisteredAuth } from "@rotate/core";
 import type {
   Adapter,
   AuthContext,
@@ -9,6 +9,7 @@ import type {
   RotationSpec,
   Secret,
 } from "@rotate/core/types";
+import { falAuthDefinition } from "./auth.ts";
 
 const FAL_API_BASE = process.env.FAL_API_URL ?? "https://api.fal.ai/v1";
 const FAL_PROVIDER = "fal-ai";
@@ -51,13 +52,11 @@ interface FalOwnershipPreload extends Record<string, unknown> {
 
 export const falAdapter: Adapter = {
   name: FAL_PROVIDER,
+  authRef: "fal",
+  authDefinition: falAuthDefinition,
 
   async auth(): Promise<AuthContext> {
-    const envToken = process.env.FAL_ADMIN_KEY;
-    if (envToken) {
-      return { kind: "env", varName: "FAL_ADMIN_KEY", token: envToken };
-    }
-    throw new Error("fal.ai auth unavailable: set FAL_ADMIN_KEY to an ADMIN-scoped key");
+    return resolveRegisteredAuth("fal");
   },
 
   async create(spec: RotationSpec, ctx: AuthContext): Promise<RotationResult<Secret>> {

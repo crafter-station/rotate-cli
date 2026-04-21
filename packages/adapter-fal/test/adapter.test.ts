@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { getAuthDefinition, registerAdapter } from "@rotate/core";
 import type { AuthContext, Secret } from "@rotate/core/types";
 import { falAdapter } from "../src/index.ts";
 
@@ -110,6 +111,30 @@ describe("adapter-fal.revoke", () => {
     };
     const r = await falAdapter.revoke(secret, mockCtx);
     expect(r.ok).toBe(true);
+  });
+});
+
+describe("adapter-fal.auth", () => {
+  beforeEach(() => {
+    if (!getAuthDefinition("fal")) {
+      registerAdapter(falAdapter);
+    }
+    delete process.env.FAL_ADMIN_KEY;
+  });
+
+  afterEach(() => {
+    delete process.env.FAL_ADMIN_KEY;
+  });
+
+  test("resolves env auth through shared auth registry", async () => {
+    process.env.FAL_ADMIN_KEY = "test-token";
+    const ctx = await falAdapter.auth();
+    expect(ctx.kind).toBe("env");
+    expect(ctx.token).toBe("test-token");
+  });
+
+  test("registers auth definition with the adapter", () => {
+    expect(getAuthDefinition("fal")?.displayName).toBe("fal.ai");
   });
 });
 
