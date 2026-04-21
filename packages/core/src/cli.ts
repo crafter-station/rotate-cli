@@ -380,6 +380,17 @@ export async function runCli(argv: string[]): Promise<void> {
             (r) =>
               `Run \`rotate status ${r.rotation.id} --json\` to check sync; \`rotate revoke ${r.rotation.id}\` when ready`,
           );
+        const skippedResults = results.filter((r) => r.envelopeStatus === "skipped");
+        const skipped = skippedResults.map((r) => ({
+          secret_id: r.rotation.secretId,
+          adapter: r.rotation.adapter,
+          reason: r.rotation.skipReason?.kind,
+          evidence: r.rotation.skipReason?.evidence,
+          verdict: r.rotation.ownership?.verdict,
+          strategy: r.rotation.ownership?.strategy,
+        }));
+        const ownershipSummary = buildOwnershipSummary(results);
+        const skipActions = buildSkipActions(skippedResults);
         emit(
           makeEnvelope({
             command: "apply",
@@ -387,19 +398,23 @@ export async function runCli(argv: string[]): Promise<void> {
             startedAt: started,
             agentMode: isAgentMode(),
             data: {
-              rotations: results.map((r) => ({
-                rotation_id: r.rotation.id,
-                secret_id: r.rotation.secretId,
-                status: r.rotation.status,
-                grace_period_ends: r.rotation.gracePeriodEndsAt,
-                consumers: r.rotation.consumers.map((c) => ({
-                  target: c.target,
-                  status: c.status,
-                  error: c.error,
+              rotations: results
+                .filter((r) => r.envelopeStatus !== "skipped")
+                .map((r) => ({
+                  rotation_id: r.rotation.id,
+                  secret_id: r.rotation.secretId,
+                  status: r.rotation.status,
+                  grace_period_ends: r.rotation.gracePeriodEndsAt,
+                  consumers: r.rotation.consumers.map((c) => ({
+                    target: c.target,
+                    status: c.status,
+                    error: c.error,
+                  })),
                 })),
-              })),
+              skipped,
+              ownership_summary: ownershipSummary,
             },
-            next_actions: nextActions,
+            next_actions: [...nextActions, ...skipActions],
           }),
           anyError ? EXIT.PROVIDER_ERROR : anyPartial ? EXIT.IN_GRACE_WARNING : EXIT.OK,
         );
@@ -606,6 +621,17 @@ export async function runCli(argv: string[]): Promise<void> {
         results.push(r);
       }
       const anyError = results.some((r) => r.envelopeStatus === "error");
+      const skippedResults = results.filter((r) => r.envelopeStatus === "skipped");
+      const skipped = skippedResults.map((r) => ({
+        secret_id: r.rotation.secretId,
+        adapter: r.rotation.adapter,
+        reason: r.rotation.skipReason?.kind,
+        evidence: r.rotation.skipReason?.evidence,
+        verdict: r.rotation.ownership?.verdict,
+        strategy: r.rotation.ownership?.strategy,
+      }));
+      const ownershipSummary = buildOwnershipSummary(results);
+      const skipActions = buildSkipActions(skippedResults);
       emit(
         makeEnvelope({
           command: "incident",
@@ -615,15 +641,24 @@ export async function runCli(argv: string[]): Promise<void> {
           data: {
             incident_id: incident.id,
             affected: selected.length,
-            rotations: results.map((r) => ({
-              rotation_id: r.rotation.id,
-              secret_id: r.rotation.secretId,
-              status: r.rotation.status,
-            })),
+            rotations: results
+              .filter((r) => r.envelopeStatus !== "skipped")
+              .map((r) => ({
+                rotation_id: r.rotation.id,
+                secret_id: r.rotation.secretId,
+                status: r.rotation.status,
+              })),
+            skipped,
+            ownership_summary: ownershipSummary,
           },
-          next_actions: results
-            .filter((r) => r.rotation.status === "in_grace")
-            .map((r) => `Check \`rotate status ${r.rotation.id}\` then revoke when consumers sync`),
+          next_actions: [
+            ...results
+              .filter((r) => r.rotation.status === "in_grace")
+              .map(
+                (r) => `Check \`rotate status ${r.rotation.id}\` then revoke when consumers sync`,
+              ),
+            ...skipActions,
+          ],
         }),
         anyError ? EXIT.PROVIDER_ERROR : EXIT.OK,
       );
@@ -684,3 +719,57 @@ function shouldRenderPretty(program: Command): boolean {
 
 // Convenience helper for audit-log append from tests.
 export { appendAudit };
+
+function buildOwnershipSummary(results: Array<{ rotation: { ownership?: { verdict: string } } }>): {
+  self: number;
+  other: number;
+  unknown: number;
+  not_checked: number;
+} {
+  const summary = { self: 0, other: 0, unknown: 0, not_checked: 0 };
+  for (const r of results) {
+    const v = r.rotation.ownership?.verdict;
+    if (v === "self") summary.self++;
+    else if (v === "other") summary.other++;
+    else if (v === "unknown") summary.unknown++;
+    else summary.not_checked++;
+  }
+  return summary;
+}
+
+function buildSkipActions(
+  skipped: Array<{
+    rotation: { secretId: string; adapter: string; skipReason?: { kind: string } };
+  }>,
+): string[] {
+  if (!skipped.length) return [];
+  const actions: string[] = [];
+  const byKind = new Map<string, string[]>();
+  for (const r of skipped) {
+    const kind = r.rotation.skipReason?.kind ?? "unknown";
+    if (!byKind.has(kind)) byKind.set(kind, []);
+    byKind.get(kind)?.push(r.rotation.secretId);
+  }
+  for (const [kind, ids] of byKind.entries()) {
+    if (kind === "ownership-other") {
+      actions.push(
+        `${ids.length} secret(s) belong to another account: ${ids.join(", ")} — ask the owner to run \`rotate apply\` with their config, or use --force-rotate-other to bypass (changes billing)`,
+      );
+    } else if (kind === "ownership-self-member-only") {
+      actions.push(
+        `${ids.length} secret(s) in your org but you lack admin: ${ids.join(", ")} — ask an admin to rotate`,
+      );
+    } else if (kind === "ownership-unknown-skipped") {
+      actions.push(
+        `${ids.length} secret(s) with unknown ownership: ${ids.join(", ")} — re-run without --skip-unknown or add currentValueEnv hints`,
+      );
+    } else if (kind === "ownership-current-value-unavailable") {
+      actions.push(
+        `${ids.length} secret(s) with unavailable current value: ${ids.join(", ")} — set currentValueEnv in rotate.config.yaml or use --no-ownership-check`,
+      );
+    } else {
+      actions.push(`${ids.length} secret(s) skipped (${kind}): ${ids.join(", ")}`);
+    }
+  }
+  return actions;
+}
