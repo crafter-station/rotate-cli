@@ -1,10 +1,14 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import upstashAdapter from "@rotate/adapter-upstash";
+import { registerAdapter, resetRegistry } from "@rotate/core/registry";
 import { vercelKvAdapter } from "../src/index.ts";
 
 describe("adapter-vercel-kv", () => {
   const originalEnv = { ...process.env };
 
   beforeEach(() => {
+    resetRegistry();
+    registerAdapter(upstashAdapter);
     delete process.env.UPSTASH_EMAIL;
     delete process.env.UPSTASH_API_KEY;
     delete process.env.VERCEL_KV_EMAIL;
@@ -12,6 +16,7 @@ describe("adapter-vercel-kv", () => {
   });
 
   afterEach(() => {
+    resetRegistry();
     process.env = { ...originalEnv };
   });
 
