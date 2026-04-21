@@ -431,6 +431,172 @@ export async function scanVercel(opts: ScanOptions): Promise<{
   };
 }
 
+/**
+ * Fetch decrypted env vars for a batch of Vercel projects, keyed by project
+ * slug (name). Used by `who` + `apply` to populate coLocatedVars on-demand
+ * so adapters can do sibling-inheritance (clerk reads CLERK_PUBLISHABLE_KEY,
+ * supabase reads SUPABASE_URL, etc.).
+ *
+ * Returns a Map<projectSlug, Record<envName, envValue>>. Failures per
+ * project are swallowed — absent keys just mean no siblings available.
+ *
+ * Why slug → id resolution is required: the scan cache stores project
+ * slugs (not ids) as the `project` field on each secret's vercel-env
+ * consumer. But /v9/projects/{id}/env expects an actual project id. So
+ * this function first enumerates all projects to build a slug→id map,
+ * then fans out env fetches by id, and finally re-keys the result by
+ * slug so callers can look it up with the scan cache key.
+ */
+export async function fetchProjectSiblings(args: {
+  token: string;
+  projects: Array<{ key: string; teamId?: string }>;
+  concurrency?: number;
+}): Promise<Map<string, Record<string, string>>> {
+  const result = new Map<string, Record<string, string>>();
+  const headers = { Authorization: `Bearer ${args.token}` };
+  const concurrency = args.concurrency ?? 10;
+  // Dedupe — many secrets share the same project.
+  const seen = new Set<string>();
+  const deduped = args.projects.filter((p) => {
+    const k = `${p.teamId ?? ""}:${p.key}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+  if (deduped.length === 0) return result;
+
+  // Step 1: enumerate all projects per team to build a slug → id map.
+  // Vercel caps /v9/projects at 3 pages × 100, so we fall back to the
+  // dashboard endpoint (which returns every project in a single call).
+  const teamIds = new Set<string>();
+  for (const p of deduped) {
+    if (p.teamId) teamIds.add(p.teamId);
+    else teamIds.add("");
+  }
+
+  const slugToId = new Map<string, { id: string; teamId?: string }>();
+  for (const teamId of teamIds) {
+    const dashUrl = teamId
+      ? `https://vercel.com/api/dashboard/environment-variables?teamId=${teamId}`
+      : "https://vercel.com/api/dashboard/environment-variables";
+    try {
+      const dashRes = await fetch(dashUrl, { headers });
+      if (dashRes.ok) {
+        const dashBody = (await dashRes.json()) as {
+          projectEnvs?: Array<{ projectId?: string; project: string }>;
+        };
+        for (const pe of dashBody.projectEnvs ?? []) {
+          if (pe.projectId) {
+            slugToId.set(pe.project, { id: pe.projectId, teamId: teamId || undefined });
+          }
+        }
+      }
+    } catch {
+      /* dashboard endpoint unavailable — fall through to /v9/projects */
+    }
+
+    // Fallback + fill gaps: /v9/projects paginated.
+    let cursor: string | null = null;
+    for (;;) {
+      const parts = ["limit=100"];
+      if (teamId) parts.push(`teamId=${teamId}`);
+      if (cursor) parts.push(`until=${cursor}`);
+      try {
+        const res = await fetch(`${VERCEL_BASE}/v9/projects?${parts.join("&")}`, { headers });
+        if (!res.ok) break;
+        const body = (await res.json()) as {
+          projects?: Array<{ id: string; name: string }>;
+          pagination?: { next: string | null };
+        };
+        for (const p of body.projects ?? []) {
+          if (!slugToId.has(p.name)) {
+            slugToId.set(p.name, { id: p.id, teamId: teamId || undefined });
+          }
+        }
+        if (!body.pagination?.next) break;
+        cursor = body.pagination.next;
+      } catch {
+        break;
+      }
+    }
+  }
+
+  // Step 2: fan out /env (list) + per-env /v1 decrypt by project id, re-key
+  // result by slug. Vercel's /v9/env only returns encrypted blobs even with
+  // decrypt=true — actual plaintext requires /v1/projects/{id}/env/{envId}
+  // which is per-env. Each decrypt call gets a 10s timeout.
+  //
+  // Limitation: `sensitive` type env vars NEVER return plaintext — Vercel
+  // docs say this explicitly. They'll be missing from the result map; that's
+  // fine since the caller treats absent siblings as "no hint available".
+  const queue = deduped.map((p) => ({
+    slug: p.key,
+    resolved: slugToId.get(p.key),
+  }));
+
+  async function fetchWithTimeout(url: string, timeoutMs = 10_000): Promise<Response | null> {
+    const ctrl = new AbortController();
+    const tid = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      return await fetch(url, { headers, signal: ctrl.signal });
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(tid);
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, queue.length) }, async () => {
+      while (queue.length) {
+        const proj = queue.shift();
+        if (!proj?.resolved) continue;
+        const { id, teamId } = proj.resolved;
+        const teamQs = teamId ? `&teamId=${teamId}` : "";
+
+        // List envs (no decrypt — we just need the ids + types).
+        const listRes = await fetchWithTimeout(
+          `${VERCEL_BASE}/v9/projects/${id}/env?decrypt=false${teamQs ? `&teamId=${teamId}` : ""}`,
+        );
+        if (!listRes?.ok) continue;
+        const listBody = (await listRes.json()) as {
+          envs?: Array<{ id: string; key: string; type: string }>;
+        };
+
+        // Only decrypt non-sensitive vars. Sensitive types return `<none>`
+        // regardless, so skipping them saves N requests per project.
+        const decryptable = (listBody.envs ?? []).filter(
+          (e) => e.type !== "sensitive" && e.type !== "secret" && e.id && e.key,
+        );
+
+        // Decrypt in parallel within the project (inner concurrency=5 so we
+        // don't pile on too aggressively — outer loop already has outer
+        // concurrency, total is concurrency*5 in flight).
+        const vars: Record<string, string> = {};
+        const envQueue = [...decryptable];
+        await Promise.all(
+          Array.from({ length: Math.min(5, envQueue.length) }, async () => {
+            while (envQueue.length) {
+              const env = envQueue.shift();
+              if (!env) continue;
+              const decUrl = `${VERCEL_BASE}/v1/projects/${id}/env/${env.id}?decrypt=true${teamQs}`;
+              const decRes = await fetchWithTimeout(decUrl);
+              if (!decRes?.ok) continue;
+              const decBody = (await decRes.json()) as { value?: string };
+              if (typeof decBody.value === "string" && decBody.value.length > 0) {
+                vars[env.key] = decBody.value;
+              }
+            }
+          }),
+        );
+        result.set(proj.slug, vars);
+      }
+    }),
+  );
+
+  return result;
+}
+
 export function resolveVercelTokenForScan(): string | null {
   if (process.env.VERCEL_TOKEN) return process.env.VERCEL_TOKEN;
   const paths =

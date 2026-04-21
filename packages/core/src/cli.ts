@@ -45,7 +45,7 @@ import {
   scanCachePath,
   writeScanCache,
 } from "./scan-cache.ts";
-import { resolveVercelTokenForScan, scanVercel } from "./scan.ts";
+import { fetchProjectSiblings, resolveVercelTokenForScan, scanVercel } from "./scan.ts";
 import type { PromptChoice, PromptIO } from "./types.ts";
 
 export async function runCli(argv: string[]): Promise<void> {
@@ -762,6 +762,54 @@ export async function runCli(argv: string[]): Promise<void> {
           }),
         );
 
+        // Fetch co-located env vars for projects whose adapters use
+        // sibling-inheritance (clerk, supabase, turso, ...). This is what
+        // makes "unknown" verdicts become "self"/"other" — without siblings
+        // clerk literally cannot tell.
+        const siblingAdapters = new Set(["clerk", "supabase", "turso", "polar", "upstash"]);
+        const needsSiblings = selected.some((s) => siblingAdapters.has(s.adapter));
+        let projectVars = new Map<string, Record<string, string>>();
+        if (needsSiblings) {
+          const token = resolveVercelTokenForScan();
+          if (token) {
+            const projectKeys = new Set<string>();
+            const projectEntries: Array<{ key: string; teamId?: string }> = [];
+            for (const secret of selected) {
+              for (const c of secret.consumers) {
+                if (c.type === "vercel-env" && c.params.project) {
+                  const k = c.params.project;
+                  const dedupKey = `${c.params.team ?? ""}:${k}`;
+                  if (!projectKeys.has(dedupKey)) {
+                    projectKeys.add(dedupKey);
+                    projectEntries.push({ key: k, teamId: c.params.team });
+                  }
+                }
+              }
+            }
+            progress?.handle({
+              kind: "preload-done",
+              adapter: "vercel-siblings",
+              durationMs: 0,
+              info: `fetching ${projectEntries.length} project(s)...`,
+            });
+            const siblingStart = Date.now();
+            projectVars = await fetchProjectSiblings({ token, projects: projectEntries });
+            progress?.handle({
+              kind: "preload-done",
+              adapter: "vercel-siblings",
+              durationMs: Date.now() - siblingStart,
+              info: `${projectVars.size}/${projectEntries.length} project(s) decrypted`,
+            });
+          } else {
+            progress?.handle({
+              kind: "preload-failed",
+              adapter: "vercel-siblings",
+              durationMs: 0,
+              error: "VERCEL_TOKEN missing — siblings unavailable",
+            });
+          }
+        }
+
         progress?.handle({ kind: "check-start", total: selected.length });
         const counters = { self: 0, other: 0, unknown: 0, notChecked: 0 };
         let done = 0;
@@ -794,11 +842,14 @@ export async function runCli(argv: string[]): Promise<void> {
               };
               counters.notChecked++;
             } else {
+              const projectKey = secret.consumers.find((c) => c.type === "vercel-env")?.params
+                .project;
+              const preFetchedVars = projectKey ? projectVars.get(projectKey) : undefined;
               const {
                 value: currentValue,
                 source,
                 error: resolveError,
-              } = await resolveCurrentValue(secret);
+              } = await resolveCurrentValue(secret, { preFetchedVars });
               if (!currentValue) {
                 check = {
                   secret_id: secret.id,
@@ -816,6 +867,7 @@ export async function runCli(argv: string[]): Promise<void> {
                   const ctx = await adapter.auth();
                   const ownership = await adapter.ownedBy(currentValue, ctx, {
                     preload: preloadMap.get(secret.adapter),
+                    coLocatedVars: preFetchedVars,
                   });
                   check = {
                     secret_id: secret.id,

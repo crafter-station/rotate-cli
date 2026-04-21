@@ -27,7 +27,10 @@ export interface CurrentValueResolution {
   error?: string;
 }
 
-export async function resolveCurrentValue(secret: SecretConfig): Promise<CurrentValueResolution> {
+export async function resolveCurrentValue(
+  secret: SecretConfig,
+  opts?: { preFetchedVars?: Record<string, string> | undefined },
+): Promise<CurrentValueResolution> {
   // 1. Explicit env var override.
   if (secret.currentValueEnv) {
     const v = process.env[secret.currentValueEnv];
@@ -42,11 +45,21 @@ export async function resolveCurrentValue(secret: SecretConfig): Promise<Current
     return { value: secret.currentValue, source: "literal" };
   }
 
+  // 2b. Pre-fetched project vars (from scan's batch sibling fetch). Avoids
+  //     the two-request list+decrypt round-trip when the caller already has
+  //     the decrypted env map in hand.
+  const vercelConsumer = secret.consumers.find((c) => c.type === "vercel-env");
+  if (opts?.preFetchedVars && vercelConsumer?.params.var_name) {
+    const v = opts.preFetchedVars[vercelConsumer.params.var_name];
+    if (typeof v === "string" && v.length > 0) {
+      return { value: v, source: "vercel-api" };
+    }
+  }
+
   // 3. Pull from Vercel. Only try the first vercel-env consumer; if the user
   //    has multiple Vercel projects with the same var they almost certainly
   //    hold the same value, and racing N requests for the same answer is
   //    wasteful.
-  const vercelConsumer = secret.consumers.find((c) => c.type === "vercel-env");
   if (vercelConsumer) {
     try {
       const pulled = await pullFromVercel(

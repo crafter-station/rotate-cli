@@ -259,8 +259,8 @@ describe("adapter-neon-connection.ownedBy", () => {
     expect(result?.evidence).toContain("owned org personal");
   });
 
-  test("does not implement preloadOwnership for format-decode strategy", () => {
-    expect(neonConnectionAdapter.preloadOwnership).toBeUndefined();
+  test("implements preloadOwnership to build ownership index from Neon API", () => {
+    expect(typeof neonConnectionAdapter.preloadOwnership).toBe("function");
   });
 });
 

@@ -36,6 +36,65 @@ export const clerkAdapter: Adapter = {
     return resolveRegisteredAuth("clerk");
   },
 
+  async preloadOwnership(ctx: AuthContext) {
+    // Enumerate the Clerk instances the auth token can see, and for each
+    // pull the FAPI host + JWKS key ids. These two sets are what ownedBy()
+    // checks against to decide self/other.
+    //
+    // PLAPI endpoint: GET /v1/instances lists every instance the caller owns.
+    // We intentionally fan out in parallel — for a typical Clerk account
+    // (1-5 instances) this is <1s, and the preload is only computed once
+    // per `who` invocation anyway.
+    const knownFapiHosts = new Set<string>();
+    const knownKids = new Set<string>();
+    try {
+      const res = await fetch(`${PLAPI_BASE}/v1/instances`, {
+        headers: { Authorization: `Bearer ${ctx.token}` },
+      });
+      if (!res.ok) return { knownFapiHosts, knownKids };
+      const body = (await res.json()) as Array<{
+        id: string;
+        home_origin?: string;
+        frontend_api_url?: string;
+        development?: boolean;
+      }>;
+      const instances = Array.isArray(body) ? body : [];
+      // For each instance: extract fapi_host from frontend_api_url, fetch
+      // JWKS to learn its kids. JWKS is public — no auth needed.
+      await Promise.all(
+        instances.map(async (inst) => {
+          if (inst.frontend_api_url) {
+            try {
+              const u = new URL(inst.frontend_api_url);
+              knownFapiHosts.add(u.host.toLowerCase());
+            } catch {
+              /* ignore malformed URL */
+            }
+          }
+          // JWKS lives at `<frontend_api_url>/.well-known/jwks.json`
+          if (inst.frontend_api_url) {
+            try {
+              const jwksRes = await fetch(
+                `${inst.frontend_api_url.replace(/\/$/, "")}/.well-known/jwks.json`,
+              );
+              if (jwksRes.ok) {
+                const jwks = (await jwksRes.json()) as { keys?: Array<{ kid?: string }> };
+                for (const k of jwks.keys ?? []) {
+                  if (typeof k.kid === "string") knownKids.add(k.kid);
+                }
+              }
+            } catch {
+              /* ignore network failure */
+            }
+          }
+        }),
+      );
+      return { knownFapiHosts, knownKids };
+    } catch {
+      return { knownFapiHosts, knownKids };
+    }
+  },
+
   async create(spec: RotationSpec, ctx: AuthContext): Promise<RotationResult<Secret>> {
     const instanceId = spec.metadata.instance_id;
     if (!instanceId) {
@@ -175,29 +234,30 @@ export const clerkAdapter: Adapter = {
         "fapiHosts",
       ]);
 
-      if (knownHosts.size === 0) {
-        return unknownOwnership("no known Clerk FAPI host fingerprints available");
-      }
-
-      if (knownHosts.has(decoded.host)) {
+      if (knownHosts.size > 0) {
+        if (knownHosts.has(decoded.host)) {
+          return {
+            verdict: "self",
+            adminCanBill: true,
+            scope: "project",
+            confidence: "high",
+            evidence: `decoded Clerk publishable key host matches known FAPI host ${decoded.host}`,
+            strategy: "format-decode",
+          };
+        }
         return {
-          verdict: "self",
-          adminCanBill: true,
+          verdict: "other",
+          adminCanBill: false,
           scope: "project",
           confidence: "high",
-          evidence: `decoded Clerk publishable key host matches known FAPI host ${decoded.host}`,
+          evidence: `decoded Clerk publishable key host ${decoded.host} is not in known FAPI hosts`,
           strategy: "format-decode",
         };
       }
 
-      return {
-        verdict: "other",
-        adminCanBill: false,
-        scope: "project",
-        confidence: "high",
-        evidence: `decoded Clerk publishable key host ${decoded.host} is not in known FAPI hosts`,
-        strategy: "format-decode",
-      };
+      return unknownOwnership(
+        `decoded Clerk publishable key host ${decoded.host}, but PLAPI preload unavailable — set a valid CLERK_PLAPI_TOKEN and retry`,
+      );
     }
 
     if (!secret.startsWith("sk_")) {

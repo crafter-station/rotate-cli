@@ -43,6 +43,88 @@ export const neonConnectionAdapter: Adapter = {
     return resolveRegisteredAuth("neon-connection");
   },
 
+  async preloadOwnership(ctx: AuthContext) {
+    // Build an ownership index by enumerating every Neon project (+ its
+    // endpoints) the auth key can see. ownedBy() then decodes the endpoint
+    // id out of the postgres connection string and looks it up here.
+    //
+    // `knownOrgIds` = orgs this key has access to (or "personal" for solo
+    // accounts). `endpointToProject` = endpoint_id → { projectId, orgId }.
+    const knownOrgIds = new Set<string>();
+    const endpointToProject = new Map<
+      string,
+      { projectId: string; orgId: string; host?: string }
+    >();
+    const fetchJson = async <T>(url: string): Promise<T | null> => {
+      const ctrl = new AbortController();
+      const tid = setTimeout(() => ctrl.abort(), 10_000);
+      try {
+        const res = await fetch(url, { headers: authHeaders(ctx), signal: ctrl.signal });
+        if (!res.ok) return null;
+        return (await res.json()) as T;
+      } catch {
+        return null;
+      } finally {
+        clearTimeout(tid);
+      }
+    };
+    try {
+      // Step 1: enumerate projects. Neon's v2 API paginates with `cursor`.
+      // Hard cap at 10 pages (1000 projects) as a safety net.
+      const projects: Array<{ id: string; org_id?: string | null }> = [];
+      let cursor: string | undefined;
+      for (let page = 0; page < 10; page++) {
+        const url = cursor
+          ? `${NEON_BASE}/projects?limit=100&cursor=${encodeURIComponent(cursor)}`
+          : `${NEON_BASE}/projects?limit=100`;
+        const body = await fetchJson<{
+          projects?: Array<{ id: string; org_id?: string | null }>;
+          pagination?: { cursor?: string };
+        }>(url);
+        if (!body) break;
+        projects.push(...(body.projects ?? []));
+        cursor = body.pagination?.cursor;
+        if (!cursor) break;
+      }
+
+      for (const p of projects) {
+        const orgId = p.org_id || "personal";
+        knownOrgIds.add(orgId);
+      }
+
+      // Step 2: enumerate endpoints per project. Parallel with concurrency=10
+      // so ~30 projects take ~3s instead of 30s.
+      const queue = [...projects];
+      const concurrency = 10;
+      await Promise.all(
+        Array.from({ length: Math.min(concurrency, queue.length) }, async () => {
+          while (queue.length) {
+            const proj = queue.shift();
+            if (!proj) continue;
+            const body = await fetchJson<{
+              endpoints?: Array<{ id?: string; host?: string }>;
+            }>(`${NEON_BASE}/projects/${encodeURIComponent(proj.id)}/endpoints`);
+            if (!body) continue;
+            const orgId = proj.org_id || "personal";
+            for (const ep of body.endpoints ?? []) {
+              if (ep.id) {
+                endpointToProject.set(ep.id, {
+                  projectId: proj.id,
+                  orgId,
+                  host: ep.host,
+                });
+              }
+            }
+          }
+        }),
+      );
+
+      return { knownOrgIds, endpointToProject };
+    } catch {
+      return { knownOrgIds, endpointToProject };
+    }
+  },
+
   async create(spec: RotationSpec, ctx: AuthContext): Promise<RotationResult<Secret>> {
     const validation = validateMetadata(spec.metadata);
     if (validation) return { ok: false, error: validation };
@@ -156,6 +238,18 @@ export const neonConnectionAdapter: Adapter = {
 
       const hit = lookupEndpoint(index.endpointToProject, endpointId);
       if (!hit) {
+        // The index exists and has entries, but this endpoint isn't in it.
+        // That's strong evidence it belongs to a Neon account the user
+        // doesn't have access to — i.e. someone else's. Use "medium"
+        // confidence since a partial/stale index would also match.
+        if (indexHasEntries(index.endpointToProject)) {
+          return ownershipResult(
+            "other",
+            false,
+            "medium",
+            `endpoint ${endpointId} not found among ${countEntries(index.endpointToProject)} endpoints visible to your Neon key — likely owned by another account`,
+          );
+        }
         return ownershipResult(
           "unknown",
           false,
@@ -287,6 +381,22 @@ function stringSet(value: unknown): Set<string> | undefined {
     );
   }
   return undefined;
+}
+
+function indexHasEntries(endpointToProject: unknown): boolean {
+  if (endpointToProject instanceof Map) return endpointToProject.size > 0;
+  if (endpointToProject && typeof endpointToProject === "object") {
+    return Object.keys(endpointToProject as Record<string, unknown>).length > 0;
+  }
+  return false;
+}
+
+function countEntries(endpointToProject: unknown): number {
+  if (endpointToProject instanceof Map) return endpointToProject.size;
+  if (endpointToProject && typeof endpointToProject === "object") {
+    return Object.keys(endpointToProject as Record<string, unknown>).length;
+  }
+  return 0;
 }
 
 function lookupEndpoint(

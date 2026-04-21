@@ -263,6 +263,14 @@ export interface SecretConfig {
    * Emits a warning on load. Prefer `currentValueEnv`.
    */
   currentValue?: string;
+  /**
+   * Co-located env vars from the same project (same Vercel project, same
+   * .env file, same GH Actions env). Populated by `scan` so adapters that
+   * use sibling-inheritance (clerk reads CLERK_PUBLISHABLE_KEY, supabase
+   * reads SUPABASE_URL, etc.) have the context they need without extra API
+   * calls. NOT persisted into rotate.config.yaml — purely a scan-time hint.
+   */
+  coLocatedVars?: Record<string, string>;
 }
 
 export interface ConsumerTargetConfig {
