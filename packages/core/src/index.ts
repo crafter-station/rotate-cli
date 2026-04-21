@@ -14,3 +14,4 @@ export * from "./prompt.ts";
 export * from "./prompt-flow.ts";
 export * from "./prompt-runtime.ts";
 export { runCli } from "./cli.ts";
+export * from "./current-value.ts";

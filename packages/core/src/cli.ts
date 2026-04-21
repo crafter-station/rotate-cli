@@ -18,6 +18,7 @@ import {
   saveCheckpoint,
 } from "./checkpoints.ts";
 import { loadConfig, loadIncident, selectByIncident, selectByQuery } from "./config.ts";
+import { resolveCurrentValue } from "./current-value.ts";
 import { emit, makeEnvelope } from "./envelope.ts";
 import { EXIT, RotateError } from "./errors.ts";
 import { applyRotation, revokeRotation } from "./orchestrator.ts";
@@ -348,18 +349,29 @@ export async function runCli(argv: string[]): Promise<void> {
         }
         const results = [];
         for (const secret of selected) {
+          const { value: currentValue } = await resolveCurrentValue(secret);
           const r = await applyRotation(secret, {
             reason: globalOpts.reason,
             agentMode: isAgentMode(),
             auditLog: globalOpts.auditLog,
             parallel: opts.parallel,
             skipVerify: opts.verify === false,
+            currentValue: currentValue ?? undefined,
           });
           results.push(r);
         }
         const anyError = results.some((r) => r.envelopeStatus === "error");
         const anyPartial = results.some((r) => r.envelopeStatus === "partial");
-        const status = anyError ? "error" : anyPartial ? "partial" : "success";
+        const anySkipped = results.some((r) => r.envelopeStatus === "skipped");
+        const allSkipped =
+          results.length > 0 && results.every((r) => r.envelopeStatus === "skipped");
+        const status = anyError
+          ? "error"
+          : allSkipped
+            ? "partial"
+            : anyPartial || anySkipped
+              ? "partial"
+              : "success";
         const nextActions = results
           .filter((r) => r.rotation.status === "in_grace")
           .map(
@@ -580,10 +592,12 @@ export async function runCli(argv: string[]): Promise<void> {
       }
       const results = [];
       for (const secret of selected) {
+        const { value: currentValue } = await resolveCurrentValue(secret);
         const r = await applyRotation(secret, {
           reason: globalOpts.reason ?? `incident:${incident.id}`,
           agentMode: isAgentMode(),
           auditLog: globalOpts.auditLog,
+          currentValue: currentValue ?? undefined,
         });
         results.push(r);
       }
