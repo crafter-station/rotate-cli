@@ -1,4 +1,5 @@
 import { makeError } from "@rotate/core";
+import { resolveRegisteredAuth } from "@rotate/core/auth";
 import type {
   Adapter,
   AuthContext,
@@ -8,6 +9,7 @@ import type {
   RotationSpec,
   Secret,
 } from "@rotate/core/types";
+import { openaiAuthDefinition, verifyOpenAIAuth } from "./auth.ts";
 
 const OPENAI_ADMIN_KEYS_BASE =
   process.env.OPENAI_ADMIN_KEYS_URL ?? "https://api.openai.com/v1/organization/admin_api_keys";
@@ -50,13 +52,11 @@ type OpenAIOwnershipContext = AuthContext & {
 
 export const openaiAdapter: Adapter = {
   name: "openai",
+  authRef: "openai",
+  authDefinition: openaiAuthDefinition,
 
   async auth(): Promise<AuthContext> {
-    const envToken = process.env.OPENAI_ADMIN_KEY;
-    if (envToken) {
-      return { kind: "env", varName: "OPENAI_ADMIN_KEY", token: envToken };
-    }
-    throw new Error("openai auth unavailable: set OPENAI_ADMIN_KEY to an OpenAI admin API key");
+    return resolveRegisteredAuth("openai");
   },
 
   async create(spec: RotationSpec, ctx: AuthContext): Promise<RotationResult<Secret>> {
@@ -97,12 +97,20 @@ export const openaiAdapter: Adapter = {
   },
 
   async verify(secret: Secret, _ctx: AuthContext): Promise<RotationResult<boolean>> {
-    const res = await request(`${OPENAI_ADMIN_KEYS_BASE}?limit=1`, {
-      headers: authHeaders(secret.value),
-    });
-    if (res instanceof Error) return { ok: false, error: networkError(res) };
-    if (!res.ok) return { ok: false, error: fromResponse(res, "verify") };
-    return { ok: true, data: true };
+    try {
+      await verifyOpenAIAuth({ kind: "env", varName: "OPENAI_ADMIN_KEY", token: secret.value });
+      return { ok: true, data: true };
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      const status = Number.parseInt(message.split(": ").at(-1) ?? "", 10);
+      if (Number.isInteger(status)) {
+        return { ok: false, error: fromStatus(status, "verify") };
+      }
+      return {
+        ok: false,
+        error: makeError("network_error", `openai network error: ${message}`, "openai", { cause }),
+      };
+    }
   },
 
   async revoke(secret: Secret, ctx: AuthContext): Promise<RotationResult<void>> {
@@ -241,15 +249,19 @@ function networkError(cause: Error) {
 }
 
 function fromResponse(res: Response, op: string) {
-  if (res.status === 401 || res.status === 403) {
-    return makeError("auth_failed", `openai ${op}: ${res.status}`, "openai");
+  return fromStatus(res.status, op);
+}
+
+function fromStatus(status: number, op: string) {
+  if (status === 401 || status === 403) {
+    return makeError("auth_failed", `openai ${op}: ${status}`, "openai");
   }
-  if (res.status === 429) return makeError("rate_limited", `openai ${op}: 429`, "openai");
-  if (res.status === 404) return makeError("not_found", `openai ${op}: 404`, "openai");
-  if (res.status >= 500) {
-    return makeError("provider_error", `openai ${op}: ${res.status}`, "openai");
+  if (status === 429) return makeError("rate_limited", `openai ${op}: 429`, "openai");
+  if (status === 404) return makeError("not_found", `openai ${op}: 404`, "openai");
+  if (status >= 500) {
+    return makeError("provider_error", `openai ${op}: ${status}`, "openai");
   }
-  return makeError("provider_error", `openai ${op}: ${res.status}`, "openai", {
+  return makeError("provider_error", `openai ${op}: ${status}`, "openai", {
     retryable: false,
   });
 }

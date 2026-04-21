@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { getAuthDefinition } from "@rotate/core/auth";
+import { registerAdapter, resetRegistry } from "@rotate/core/registry";
 import type { AuthContext, Secret } from "@rotate/core/types";
 import { openaiAdapter } from "../src/index.ts";
 
@@ -17,10 +19,15 @@ function mockFetch(responder: (url: string, init?: RequestInit) => Response | Pr
 
 beforeEach(() => {
   calls = [];
+  resetRegistry();
+  registerAdapter(openaiAdapter);
+  delete process.env.OPENAI_ADMIN_KEY;
 });
 
 afterEach(() => {
   global.fetch = originalFetch;
+  resetRegistry();
+  delete process.env.OPENAI_ADMIN_KEY;
 });
 
 const mockCtx: AuthContext = {
@@ -111,6 +118,19 @@ describe("adapter-openai.revoke", () => {
     };
     const r = await openaiAdapter.revoke(secret, mockCtx);
     expect(r.ok).toBe(true);
+  });
+});
+
+describe("adapter-openai.auth", () => {
+  test("resolves env auth through shared auth registry", async () => {
+    process.env.OPENAI_ADMIN_KEY = "sk-admin-env";
+    const ctx = await openaiAdapter.auth();
+    expect(ctx.kind).toBe("env");
+    expect(ctx.token).toBe("sk-admin-env");
+  });
+
+  test("registers auth definition with the adapter", () => {
+    expect(getAuthDefinition("openai")?.displayName).toBe("OpenAI");
   });
 });
 

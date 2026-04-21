@@ -1,3 +1,4 @@
+import { getAuthDefinition, registerAuthDefinition, resetAuthDefinitions } from "./auth.ts";
 import type { Adapter, Consumer } from "./types.ts";
 
 /** Simple registry. Packages register via register() at import time. */
@@ -7,6 +8,19 @@ const consumers = new Map<string, Consumer>();
 export function registerAdapter(adapter: Adapter): void {
   if (adapters.has(adapter.name)) {
     throw new Error(`adapter already registered: ${adapter.name}`);
+  }
+  if (adapter.authDefinition) {
+    const expectedName = adapter.authRef ?? adapter.name;
+    if (adapter.authDefinition.name !== expectedName) {
+      throw new Error(
+        `adapter auth definition mismatch: ${adapter.name} expected ${expectedName}, got ${adapter.authDefinition.name}`,
+      );
+    }
+    const registered = getAuthDefinition(adapter.authDefinition.name);
+    if (registered) {
+      throw new Error(`auth definition already registered: ${adapter.authDefinition.name}`);
+    }
+    registerAuthDefinition(adapter.authDefinition);
   }
   adapters.set(adapter.name, adapter);
 }
@@ -37,4 +51,5 @@ export function listConsumers(): Consumer[] {
 export function resetRegistry(): void {
   adapters.clear();
   consumers.clear();
+  resetAuthDefinitions();
 }

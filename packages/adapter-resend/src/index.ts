@@ -1,4 +1,5 @@
 import { makeError } from "@rotate/core";
+import { resolveRegisteredAuth } from "@rotate/core/auth";
 import type {
   Adapter,
   AuthContext,
@@ -9,6 +10,7 @@ import type {
   RotationSpec,
   Secret,
 } from "@rotate/core/types";
+import { resendAuthDefinition, verifyResendAuth } from "./auth.ts";
 
 const RESEND_API_KEYS_BASE = process.env.RESEND_API_KEYS_URL ?? "https://api.resend.com/api-keys";
 const RESEND_DOMAINS_BASE = process.env.RESEND_DOMAINS_URL ?? "https://api.resend.com/domains";
@@ -41,13 +43,11 @@ interface ResendListDomainsResponse {
 
 export const resendAdapter: Adapter = {
   name: RESEND_PROVIDER,
+  authRef: RESEND_PROVIDER,
+  authDefinition: resendAuthDefinition,
 
   async auth(): Promise<AuthContext> {
-    const envToken = process.env.RESEND_API_KEY;
-    if (envToken) {
-      return { kind: "env", varName: "RESEND_API_KEY", token: envToken };
-    }
-    throw new Error("resend auth unavailable: set RESEND_API_KEY");
+    return resolveRegisteredAuth(RESEND_PROVIDER);
   },
 
   async create(spec: RotationSpec, ctx: AuthContext): Promise<RotationResult<Secret>> {
@@ -105,12 +105,20 @@ export const resendAdapter: Adapter = {
   },
 
   async verify(secret: Secret, _ctx: AuthContext): Promise<RotationResult<boolean>> {
-    const res = await request(RESEND_API_KEYS_BASE, {
-      headers: authHeaders(secret.value),
-    });
-    if (res instanceof Error) return { ok: false, error: networkError(res) };
-    if (!res.ok) return { ok: false, error: fromResponse(res, "verify") };
-    return { ok: true, data: true };
+    try {
+      await verifyResendAuth({ kind: "env", varName: "RESEND_API_KEY", token: secret.value });
+      return { ok: true, data: true };
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      const status = Number.parseInt(message.split(": ").at(-1) ?? "", 10);
+      if (Number.isInteger(status)) {
+        return { ok: false, error: fromStatus(status, "verify") };
+      }
+      return {
+        ok: false,
+        error: networkError(cause instanceof Error ? cause : new Error(message)),
+      };
+    }
   },
 
   async revoke(secret: Secret, ctx: AuthContext): Promise<RotationResult<void>> {
@@ -361,15 +369,19 @@ function networkError(cause: Error) {
 }
 
 function fromResponse(res: Response, op: string) {
-  if (res.status === 401 || res.status === 403) {
-    return makeError("auth_failed", `resend ${op}: ${res.status}`, RESEND_PROVIDER);
+  return fromStatus(res.status, op);
+}
+
+function fromStatus(status: number, op: string) {
+  if (status === 401 || status === 403) {
+    return makeError("auth_failed", `resend ${op}: ${status}`, RESEND_PROVIDER);
   }
-  if (res.status === 429) return makeError("rate_limited", `resend ${op}: 429`, RESEND_PROVIDER);
-  if (res.status === 404) return makeError("not_found", `resend ${op}: 404`, RESEND_PROVIDER);
-  if (res.status >= 500) {
-    return makeError("provider_error", `resend ${op}: ${res.status}`, RESEND_PROVIDER);
+  if (status === 429) return makeError("rate_limited", `resend ${op}: 429`, RESEND_PROVIDER);
+  if (status === 404) return makeError("not_found", `resend ${op}: 404`, RESEND_PROVIDER);
+  if (status >= 500) {
+    return makeError("provider_error", `resend ${op}: ${status}`, RESEND_PROVIDER);
   }
-  return makeError("provider_error", `resend ${op}: ${res.status}`, RESEND_PROVIDER, {
+  return makeError("provider_error", `resend ${op}: ${status}`, RESEND_PROVIDER, {
     retryable: false,
   });
 }

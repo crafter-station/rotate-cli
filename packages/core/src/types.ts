@@ -14,6 +14,114 @@ export type AuthContext =
   | { kind: "encrypted-file"; path: string; token: string }
   | { kind: "env"; varName: string; token: string };
 
+export interface AuthStoredCredential {
+  token: string;
+  updatedAt: string;
+  source: "manual";
+}
+
+export interface AuthSummary {
+  name: string;
+  displayName: string;
+  envVars: string[];
+  setupUrl?: string;
+  notes?: string[];
+}
+
+export interface AuthListEntry {
+  name: string;
+  displayName: string;
+  status: "configured" | "missing";
+  source: "env" | "stored" | "none";
+  envVars: string[];
+  setupUrl?: string;
+  usedBy: Array<{ kind: "adapter" | "consumer"; name: string }>;
+}
+
+export interface PromptChoice {
+  label: string;
+  value: string;
+  hint?: string;
+}
+
+export interface PromptConfirmOptions {
+  initialValue?: boolean;
+}
+
+export interface PromptStepNote {
+  kind: "note";
+  message: string;
+}
+
+export interface PromptStepText {
+  kind: "text";
+  name: string;
+  message: string;
+  placeholder?: string;
+  initialValue?: string;
+}
+
+export interface PromptStepPassword {
+  kind: "password";
+  name: string;
+  message: string;
+  mask?: string;
+}
+
+export interface PromptStepSelect {
+  kind: "select";
+  name: string;
+  message: string;
+  choices: PromptChoice[];
+}
+
+export interface PromptStepConfirm {
+  kind: "confirm";
+  name: string;
+  message: string;
+  initialValue?: boolean;
+}
+
+export type PromptStep =
+  | PromptStepNote
+  | PromptStepText
+  | PromptStepPassword
+  | PromptStepSelect
+  | PromptStepConfirm;
+
+export type PromptAnswers = Record<string, string | boolean>;
+
+export interface PromptIO {
+  readonly isInteractive: boolean;
+  note(message: string): void;
+  promptLine(message: string): Promise<string>;
+  promptSecret(message: string): Promise<string>;
+  select(message: string, choices: PromptChoice[]): Promise<string>;
+  confirm(message: string, options?: PromptConfirmOptions): Promise<boolean>;
+  close(): Promise<void>;
+}
+
+export interface AuthMethodDefinition {
+  readonly id: string;
+  readonly label: string;
+  readonly description?: string;
+  readonly steps: PromptStep[];
+  submit(answers: PromptAnswers, io: PromptIO): Promise<AuthContext>;
+}
+
+export interface AuthDefinition {
+  readonly name: string;
+  readonly displayName: string;
+  readonly envVars: string[];
+  readonly setupUrl?: string;
+  readonly notes?: string[];
+  readonly methods?: AuthMethodDefinition[];
+  resolve(): Promise<AuthContext>;
+  login(io: PromptIO): Promise<AuthContext>;
+  logout?(): Promise<boolean>;
+  verify?(ctx: AuthContext): Promise<void>;
+}
+
 export interface RotationSpec {
   secretId: string;
   adapter: string;
@@ -46,6 +154,8 @@ export interface AdapterError {
 
 export interface Adapter {
   readonly name: string;
+  readonly authRef?: string;
+  readonly authDefinition?: AuthDefinition;
   auth(): Promise<AuthContext>;
   create(spec: RotationSpec, ctx: AuthContext): Promise<RotationResult<Secret>>;
   verify(secret: Secret, ctx: AuthContext): Promise<RotationResult<boolean>>;
@@ -118,6 +228,7 @@ export interface ConsumerTarget {
 
 export interface Consumer {
   readonly name: string;
+  readonly authRef?: string;
   auth(): Promise<AuthContext>;
   propagate(
     target: ConsumerTarget,

@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { getAuthDefinition } from "@rotate/core/auth";
+import { registerAdapter, resetRegistry } from "@rotate/core/registry";
 import type { AuthContext, Secret } from "@rotate/core/types";
 import { resendAdapter } from "../src/index.ts";
 
@@ -17,10 +19,15 @@ function mockFetch(responder: (url: string, init?: RequestInit) => Response | Pr
 
 beforeEach(() => {
   calls = [];
+  resetRegistry();
+  registerAdapter(resendAdapter);
+  delete process.env.RESEND_API_KEY;
 });
 
 afterEach(() => {
   global.fetch = originalFetch;
+  resetRegistry();
+  delete process.env.RESEND_API_KEY;
 });
 
 const mockCtx: AuthContext = { kind: "env", varName: "RESEND_API_KEY", token: "re_old" };
@@ -95,6 +102,20 @@ describe("adapter-resend.revoke", () => {
     };
     const r = await resendAdapter.revoke(secret, mockCtx);
     expect(r.ok).toBe(true);
+  });
+});
+
+describe("adapter-resend.auth", () => {
+  test("resolves env auth through shared auth registry", async () => {
+    process.env.RESEND_API_KEY = "re_env";
+    const ctx = await resendAdapter.auth();
+    expect(ctx.kind).toBe("env");
+    expect(ctx.token).toBe("re_env");
+  });
+
+  test("registers auth definition with the adapter", () => {
+    expect(getAuthDefinition("resend")?.displayName).toBe("Resend");
+    expect(getAuthDefinition("resend")?.notes?.[0]).toContain("Full access");
   });
 });
 
