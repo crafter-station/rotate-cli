@@ -351,6 +351,7 @@ export function createScanProgressRenderer(): {
   stop: () => void;
 } {
   const spinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+  const isTTY = Boolean(process.stdout.isTTY);
   let frame = 0;
   let active: {
     team: string;
@@ -358,32 +359,34 @@ export function createScanProgressRenderer(): {
     projectsScanned: number;
     secretsSoFar: number;
   } | null = null;
-  let lastLineWritten = false;
+  let spinnerActive = false;
 
-  const interval = setInterval(() => {
-    frame = (frame + 1) % spinnerFrames.length;
-    if (active) drawActive();
-  }, 80);
+  const interval = isTTY
+    ? setInterval(() => {
+        frame = (frame + 1) % spinnerFrames.length;
+        if (active) drawActive();
+      }, 80)
+    : null;
 
-  function clearLine(): void {
-    if (lastLineWritten && process.stdout.isTTY) {
-      process.stdout.write("\r\x1b[K");
-      lastLineWritten = false;
-    }
+  function clearSpinnerLine(): void {
+    if (!isTTY || !spinnerActive) return;
+    // \r returns to column 0, \x1b[2K erases the entire line (safer than \x1b[K).
+    process.stdout.write("\r\x1b[2K");
+    spinnerActive = false;
   }
 
   function drawActive(): void {
-    if (!active) return;
-    clearLine();
+    if (!active || !isTTY) return;
+    clearSpinnerLine();
     const spin = pc.cyan(spinnerFrames[frame]);
     const progress = pc.dim(`${active.projectsScanned}/${active.totalProjects}`);
     const secrets = active.secretsSoFar > 0 ? pc.dim(` · ${active.secretsSoFar} secrets`) : "";
     process.stdout.write(`  ${spin} ${active.team.padEnd(20)} ${progress}${secrets}`);
-    lastLineWritten = true;
+    spinnerActive = true;
   }
 
   function writeStaticLine(line: string): void {
-    clearLine();
+    clearSpinnerLine();
     process.stdout.write(`${line}\n`);
     if (active) drawActive();
   }
@@ -425,8 +428,9 @@ export function createScanProgressRenderer(): {
   }
 
   function stop(): void {
-    clearInterval(interval);
-    clearLine();
+    if (interval) clearInterval(interval);
+    clearSpinnerLine();
+    active = null;
   }
 
   return { handle, stop };

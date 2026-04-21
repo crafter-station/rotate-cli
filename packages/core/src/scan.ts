@@ -137,20 +137,35 @@ export async function scanVercel(opts: ScanOptions): Promise<{
 
   for (const team of teams) {
     const teamStarted = Date.now();
-    const qs = team.id ? `&teamId=${team.id}` : "";
-    const projRes = await fetch(`${VERCEL_BASE}/v9/projects?limit=100${qs}`, { headers });
-    if (!projRes.ok) {
-      opts.onProgress?.({
-        kind: "team-skipped",
-        team: team.slug,
-        reason: `projects ${projRes.status}`,
+    const teamIdQs = team.id ? `teamId=${team.id}` : "";
+    const projList: Array<{ id: string; name: string }> = [];
+    let cursor: string | null = null;
+    let paginationFailed = false;
+    for (;;) {
+      const parts = ["limit=100"];
+      if (teamIdQs) parts.push(teamIdQs);
+      if (cursor) parts.push(`until=${cursor}`);
+      const projRes = await fetch(`${VERCEL_BASE}/v9/projects?${parts.join("&")}`, {
+        headers,
       });
-      continue;
+      if (!projRes.ok) {
+        paginationFailed = true;
+        opts.onProgress?.({
+          kind: "team-skipped",
+          team: team.slug,
+          reason: `projects ${projRes.status}`,
+        });
+        break;
+      }
+      const projBody = (await projRes.json()) as {
+        projects?: Array<{ id: string; name: string }>;
+        pagination?: { next: string | null };
+      };
+      projList.push(...(projBody.projects ?? []));
+      if (!projBody.pagination?.next) break;
+      cursor = projBody.pagination.next;
     }
-    const projBody = (await projRes.json()) as {
-      projects?: Array<{ id: string; name: string }>;
-    };
-    const projList = projBody.projects ?? [];
+    if (paginationFailed) continue;
     opts.onProgress?.({
       kind: "team-start",
       team: team.slug,
@@ -161,10 +176,10 @@ export async function scanVercel(opts: ScanOptions): Promise<{
     let teamSecretsFound = 0;
 
     async function scanProject(proj: { id: string; name: string }): Promise<void> {
-      const envRes = await fetch(
-        `${VERCEL_BASE}/v9/projects/${proj.id}/env?decrypt=false${qs ? `?${qs.slice(1)}` : ""}`,
-        { headers },
-      );
+      const envUrl = teamIdQs
+        ? `${VERCEL_BASE}/v9/projects/${proj.id}/env?decrypt=false&${teamIdQs}`
+        : `${VERCEL_BASE}/v9/projects/${proj.id}/env?decrypt=false`;
+      const envRes = await fetch(envUrl, { headers });
       if (envRes.ok) {
         const envBody = (await envRes.json()) as {
           envs?: Array<{ id: string; key: string; type: string; target?: string[] }>;
