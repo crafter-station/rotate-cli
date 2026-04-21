@@ -2,6 +2,10 @@ import { makeError } from "@rotate/core";
 import type {
   Adapter,
   AuthContext,
+  OwnershipOptions,
+  OwnershipPreload,
+  OwnershipResult,
+  OwnershipVerdict,
   RotationResult,
   RotationSpec,
   Secret,
@@ -9,11 +13,23 @@ import type {
 
 const NEON_BASE = process.env.NEON_API_URL ?? "https://console.neon.tech/api/v2";
 const DEFAULT_BRANCH_ID = "main";
+const HOST_ENDPOINT_RE =
+  /@((?:ep-[a-z]+-[a-z]+-[a-z0-9]+))(?:-pooler)?\.(?:[a-z0-9-]+\.)*(?:aws|gcp|azure)\.neon\.tech\.?/i;
+const PROJECT_OPTION_RE =
+  /(?:^|[?&])(?:options=)?(?:project=)(ep-[a-z]+-[a-z]+-[a-z0-9]+)(?:-pooler)?/i;
 
 interface NeonResetPasswordResponse {
   role?: {
     password?: string;
   };
+}
+
+interface EndpointOwnership {
+  projectId?: string;
+  project_id?: string;
+  orgId?: string;
+  org_id?: string | null;
+  host?: string;
 }
 
 export const neonConnectionAdapter: Adapter = {
@@ -111,6 +127,65 @@ export const neonConnectionAdapter: Adapter = {
   async revoke(_secret: Secret, _ctx: AuthContext): Promise<RotationResult<void>> {
     return { ok: true, data: undefined };
   },
+
+  async ownedBy(
+    secretValue: string,
+    _ctx: AuthContext,
+    opts?: OwnershipOptions,
+  ): Promise<OwnershipResult> {
+    try {
+      const endpointId = extractEndpointId(secretValue);
+      if (!endpointId) {
+        return ownershipResult(
+          "unknown",
+          false,
+          "low",
+          "no Neon endpoint id found in postgres connection string",
+        );
+      }
+
+      const index = ownershipIndex(opts?.preload);
+      if (!index) {
+        return ownershipResult(
+          "unknown",
+          false,
+          "low",
+          `endpoint ${endpointId} decoded, ownership index unavailable`,
+        );
+      }
+
+      const hit = lookupEndpoint(index.endpointToProject, endpointId);
+      if (!hit) {
+        return ownershipResult(
+          "unknown",
+          false,
+          "low",
+          `endpoint ${endpointId} not found in ownership index`,
+        );
+      }
+
+      const orgId = normalizeOrgId(hit.orgId ?? hit.org_id);
+      const projectId = hit.projectId ?? hit.project_id ?? "unknown project";
+      const verdict = index.knownOrgIds.has(orgId) ? "self" : "other";
+
+      return ownershipResult(
+        verdict,
+        verdict === "self",
+        "high",
+        verdict === "self"
+          ? `endpoint ${endpointId} maps to project ${projectId} in owned org ${orgId}`
+          : `endpoint ${endpointId} maps to project ${projectId} in org ${orgId} outside known orgs`,
+        "project",
+      );
+    } catch {
+      return ownershipResult(
+        "unknown",
+        false,
+        "low",
+        "ownership detection failed before provider mutation",
+      );
+    }
+  },
 };
 
 export default neonConnectionAdapter;
@@ -153,6 +228,104 @@ function compactMetadata(input: Record<string, string | undefined>): Record<stri
   return Object.fromEntries(
     Object.entries(input).filter((entry): entry is [string, string] => Boolean(entry[1])),
   );
+}
+
+function extractEndpointId(secretValue: string): string | undefined {
+  const trimmed = stripQuotes(secretValue.trim());
+  if (!trimmed.startsWith("postgres://") && !trimmed.startsWith("postgresql://")) {
+    return undefined;
+  }
+
+  const hostMatch = trimmed.match(HOST_ENDPOINT_RE);
+  if (hostMatch?.[1]) return hostMatch[1].toLowerCase();
+
+  const decoded = decodeURIComponentSafe(trimmed);
+  const optionMatch = decoded.match(PROJECT_OPTION_RE);
+  return optionMatch?.[1]?.toLowerCase();
+}
+
+function stripQuotes(value: string): string {
+  const first = value[0];
+  const last = value[value.length - 1];
+  if ((first === `"` && last === `"`) || (first === `'` && last === `'`)) {
+    return value.slice(1, -1);
+  }
+  return value;
+}
+
+function decodeURIComponentSafe(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+function ownershipIndex(preload: OwnershipPreload | undefined) {
+  if (!preload) return undefined;
+
+  const knownOrgIds = stringSet(preload.knownOrgIds);
+  const endpointToProject = preload.endpointToProject;
+  if (!knownOrgIds || !endpointToProject) return undefined;
+
+  knownOrgIds.add("personal");
+  return { knownOrgIds, endpointToProject };
+}
+
+function stringSet(value: unknown): Set<string> | undefined {
+  if (value instanceof Set) {
+    return new Set([...value].filter((entry): entry is string => typeof entry === "string"));
+  }
+  if (Array.isArray(value)) {
+    return new Set(value.filter((entry): entry is string => typeof entry === "string"));
+  }
+  if (value && typeof value === "object") {
+    return new Set(
+      Object.entries(value)
+        .filter(([, enabled]) => Boolean(enabled))
+        .map(([key]) => key),
+    );
+  }
+  return undefined;
+}
+
+function lookupEndpoint(
+  endpointToProject: unknown,
+  endpointId: string,
+): EndpointOwnership | undefined {
+  if (endpointToProject instanceof Map) {
+    return normalizeEndpoint(endpointToProject.get(endpointId));
+  }
+  if (endpointToProject && typeof endpointToProject === "object") {
+    return normalizeEndpoint((endpointToProject as Record<string, unknown>)[endpointId]);
+  }
+  return undefined;
+}
+
+function normalizeEndpoint(value: unknown): EndpointOwnership | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  return value as EndpointOwnership;
+}
+
+function normalizeOrgId(value: string | null | undefined): string {
+  return value || "personal";
+}
+
+function ownershipResult(
+  verdict: OwnershipVerdict,
+  adminCanBill: boolean,
+  confidence: OwnershipResult["confidence"],
+  evidence: string,
+  scope?: OwnershipResult["scope"],
+): OwnershipResult {
+  return {
+    verdict,
+    adminCanBill,
+    scope,
+    confidence,
+    evidence,
+    strategy: "format-decode",
+  };
 }
 
 function networkError(cause: Error) {

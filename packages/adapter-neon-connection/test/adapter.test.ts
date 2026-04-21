@@ -149,6 +149,117 @@ describe("adapter-neon-connection.verify", () => {
   });
 });
 
+describe("adapter-neon-connection.ownedBy", () => {
+  test("returns self from decoded endpoint and warm index without calling Neon", async () => {
+    mockFetch(() => new Response("should not be called", { status: 500 }));
+    const result = await neonConnectionAdapter.ownedBy?.(
+      "postgresql://app:secret@ep-cool-darkness-a1b2c3d4.us-east-2.aws.neon.tech/main?sslmode=require",
+      mockCtx,
+      {
+        preload: {
+          knownOrgIds: ["org_owned"],
+          endpointToProject: {
+            "ep-cool-darkness-a1b2c3d4": {
+              projectId: "prj_owned",
+              orgId: "org_owned",
+            },
+          },
+        },
+      },
+    );
+
+    expect(result?.verdict).toBe("self");
+    expect(result?.adminCanBill).toBe(true);
+    expect(result?.confidence).toBe("high");
+    expect(result?.strategy).toBe("format-decode");
+    expect(result?.scope).toBe("project");
+    expect(result?.evidence).toContain("ep-cool-darkness-a1b2c3d4");
+    expect(result?.evidence).not.toContain("secret");
+    expect(calls).toHaveLength(0);
+  });
+
+  test("returns other when decoded endpoint maps outside known orgs", async () => {
+    const result = await neonConnectionAdapter.ownedBy?.(
+      "postgres://app:secret@ep-bright-river-abcdef-pooler.eu-central-1.aws.neon.tech/main",
+      mockCtx,
+      {
+        preload: {
+          knownOrgIds: ["org_owned"],
+          endpointToProject: new Map([
+            [
+              "ep-bright-river-abcdef",
+              {
+                projectId: "prj_foreign",
+                orgId: "org_foreign",
+              },
+            ],
+          ]),
+        },
+      },
+    );
+
+    expect(result?.verdict).toBe("other");
+    expect(result?.adminCanBill).toBe(false);
+    expect(result?.confidence).toBe("high");
+    expect(result?.scope).toBe("project");
+  });
+
+  test("returns unknown when ownership index is unavailable", async () => {
+    mockFetch(() => new Response("unauthorized", { status: 401 }));
+    const result = await neonConnectionAdapter.ownedBy?.(
+      "postgresql://app:secret@ep-cold-meadow-123abc.us-east-1.aws.neon.tech/main",
+      mockCtx,
+    );
+
+    expect(result?.verdict).toBe("unknown");
+    expect(result?.adminCanBill).toBe(false);
+    expect(result?.confidence).toBe("low");
+    expect(result?.evidence).toBe(
+      "endpoint ep-cold-meadow-123abc decoded, ownership index unavailable",
+    );
+    expect(calls).toHaveLength(0);
+  });
+
+  test("returns unknown when fetch would fail because ownedBy is zero-call", async () => {
+    global.fetch = (() => Promise.reject(new Error("network down"))) as FetchFn;
+    const result = await neonConnectionAdapter.ownedBy?.(
+      "postgresql://app:secret@ep-missing-field-456def.us-east-1.aws.neon.tech/main",
+      mockCtx,
+    );
+
+    expect(result?.verdict).toBe("unknown");
+    expect(result?.evidence).toBe(
+      "endpoint ep-missing-field-456def decoded, ownership index unavailable",
+    );
+  });
+
+  test("returns self for legacy project query parameter shape", async () => {
+    const result = await neonConnectionAdapter.ownedBy?.(
+      "postgresql://app:secret@db.internal/main?options=project%3Dep-hidden-stream-789abc",
+      mockCtx,
+      {
+        preload: {
+          knownOrgIds: { personal: true },
+          endpointToProject: {
+            "ep-hidden-stream-789abc": {
+              projectId: "prj_personal",
+              orgId: null,
+            },
+          },
+        },
+      },
+    );
+
+    expect(result?.verdict).toBe("self");
+    expect(result?.adminCanBill).toBe(true);
+    expect(result?.evidence).toContain("owned org personal");
+  });
+
+  test("does not implement preloadOwnership for format-decode strategy", () => {
+    expect(neonConnectionAdapter.preloadOwnership).toBeUndefined();
+  });
+});
+
 describe("adapter-neon-connection.revoke", () => {
   test("is idempotent on 404", async () => {
     mockFetch(() => new Response("not found", { status: 404 }));

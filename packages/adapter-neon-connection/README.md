@@ -26,6 +26,14 @@ The adapter uses `NEON_API_KEY` against `https://console.neon.tech/api/v2`. For 
 
 This package has no database driver dependency, so `verify` cannot open a Postgres connection with the new URL. It makes a real Neon API call to confirm that the API key and project are still valid. The strongest post-rotation signal should come from a consumer-side health check in the application that uses the new `DATABASE_URL`.
 
+## Ownership detection
+
+`ownedBy()` uses format-decode ownership detection for Neon Postgres connection strings. It extracts the globally unique `ep-...` endpoint id from the connection hostname, strips the optional `-pooler` suffix, and checks that id against a warm `endpointToProject` reverse index supplied in `opts.preload`.
+
+The check makes zero provider calls and never logs or returns the connection string password. A hit in an owned org returns `verdict: "self"` with high confidence; a hit outside the known org set returns `verdict: "other"` with high confidence; a malformed string, missing index, or endpoint miss returns `verdict: "unknown"` for human review.
+
+`preloadOwnership()` is intentionally not implemented for this adapter because the ownership strategy is `format-decode`, not `list-match`.
+
 ## Config Example
 
 ```yaml
