@@ -115,24 +115,39 @@ export async function scanVercel(opts: ScanOptions): Promise<{
 }> {
   const headers = { Authorization: `Bearer ${opts.token}` };
 
-  // 1. Enumerate teams (or just the one requested).
+  // 1. Enumerate scopes the token can actually see.
+  //
+  // Vercel tokens come in two shapes: user-scoped (ve personal + every team
+  // the user belongs to) and team-scoped (ve solo un team). We hit /v2/teams
+  // to enumerate what the token owns. If the user passed --team we respect
+  // that. If /v2/teams is empty we assume a pure-personal hobby account
+  // and fall back to the no-teamId scope.
   const teams: Array<{ id?: string; slug: string }> = [];
   if (opts.teamSlug) {
-    teams.push({ slug: opts.teamSlug });
+    // User-provided slug → resolve to an id so we can use teamId in requests.
+    const res = await fetch(`${VERCEL_BASE}/v2/teams?limit=50`, { headers });
+    if (!res.ok) throw new Error(`vercel list teams failed: ${res.status}`);
+    const body = (await res.json()) as { teams?: Array<{ id: string; slug: string }> };
+    const match = body.teams?.find((t) => t.slug === opts.teamSlug);
+    if (match) teams.push({ id: match.id, slug: match.slug });
+    else teams.push({ slug: opts.teamSlug }); // fallback (may 404)
   } else {
     const res = await fetch(`${VERCEL_BASE}/v2/teams?limit=50`, { headers });
     if (!res.ok) throw new Error(`vercel list teams failed: ${res.status}`);
     const body = (await res.json()) as { teams?: Array<{ id: string; slug: string }> };
-    for (const t of body.teams ?? []) teams.push({ id: t.id, slug: t.slug });
-    // Also include personal scope (no teamId).
-    teams.unshift({ slug: "personal" });
+    const accessibleTeams = body.teams ?? [];
+    if (accessibleTeams.length > 0) {
+      for (const t of accessibleTeams) teams.push({ id: t.id, slug: t.slug });
+    } else {
+      // Hobby account with no team membership — only personal scope available.
+      teams.push({ slug: "personal" });
+    }
   }
 
   opts.onProgress?.({ kind: "teams-discovered", teams: teams.map((t) => t.slug) });
 
   const secrets: ScannedSecret[] = [];
   const skipped: Array<{ var_name: string; project: string; reason: string }> = [];
-  const seenProjectIds = new Set<string>();
   let projectsScanned = 0;
   const concurrency = opts.concurrency ?? 6;
 
@@ -167,25 +182,6 @@ export async function scanVercel(opts: ScanOptions): Promise<{
       cursor = projBody.pagination.next;
     }
     if (paginationFailed) continue;
-
-    // Dedupe: if the token lacks cross-team scope, Vercel silently ignores
-    // teamId and returns the user's personal scope. We'd rescan the same
-    // projects per team otherwise.
-    const uniqueProjList = projList.filter((p) => {
-      if (seenProjectIds.has(p.id)) return false;
-      seenProjectIds.add(p.id);
-      return true;
-    });
-    if (team.id && uniqueProjList.length === 0 && projList.length > 0) {
-      opts.onProgress?.({
-        kind: "team-skipped",
-        team: team.slug,
-        reason: "token lacks cross-team scope — Vercel returned personal projects",
-      });
-      continue;
-    }
-    projList.length = 0;
-    projList.push(...uniqueProjList);
     opts.onProgress?.({
       kind: "team-start",
       team: team.slug,
