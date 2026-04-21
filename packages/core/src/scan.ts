@@ -132,6 +132,7 @@ export async function scanVercel(opts: ScanOptions): Promise<{
 
   const secrets: ScannedSecret[] = [];
   const skipped: Array<{ var_name: string; project: string; reason: string }> = [];
+  const seenProjectIds = new Set<string>();
   let projectsScanned = 0;
   const concurrency = opts.concurrency ?? 6;
 
@@ -166,6 +167,25 @@ export async function scanVercel(opts: ScanOptions): Promise<{
       cursor = projBody.pagination.next;
     }
     if (paginationFailed) continue;
+
+    // Dedupe: if the token lacks cross-team scope, Vercel silently ignores
+    // teamId and returns the user's personal scope. We'd rescan the same
+    // projects per team otherwise.
+    const uniqueProjList = projList.filter((p) => {
+      if (seenProjectIds.has(p.id)) return false;
+      seenProjectIds.add(p.id);
+      return true;
+    });
+    if (team.id && uniqueProjList.length === 0 && projList.length > 0) {
+      opts.onProgress?.({
+        kind: "team-skipped",
+        team: team.slug,
+        reason: "token lacks cross-team scope — Vercel returned personal projects",
+      });
+      continue;
+    }
+    projList.length = 0;
+    projList.push(...uniqueProjList);
     opts.onProgress?.({
       kind: "team-start",
       team: team.slug,
