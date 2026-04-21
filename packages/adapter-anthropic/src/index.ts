@@ -5,6 +5,9 @@ import { makeError } from "@rotate/core";
 import type {
   Adapter,
   AuthContext,
+  OwnershipOptions,
+  OwnershipPreload,
+  OwnershipResult,
   RotationResult,
   RotationSpec,
   Secret,
@@ -12,7 +15,9 @@ import type {
 
 const ANTHROPIC_BASE = process.env.ANTHROPIC_API_URL ?? "https://api.anthropic.com";
 const API_KEYS_PATH = "/v1/organizations/api_keys";
+const ORG_ME_PATH = "/v1/organizations/me";
 const ANTHROPIC_VERSION = "2023-06-01";
+const CLOSE_TIME_MS = 2 * 60 * 1000;
 
 interface AnthropicApiKey {
   id?: string;
@@ -30,6 +35,34 @@ interface AnthropicApiKey {
 
 interface AnthropicListResponse {
   data?: AnthropicApiKey[];
+  has_more?: boolean;
+  last_id?: string;
+}
+
+interface AnthropicOrgResponse {
+  id?: string;
+  name?: string;
+}
+
+interface AnthropicOwnershipKey {
+  id: string;
+  name?: string;
+  workspaceId?: string;
+  createdAt?: string;
+  partialKey?: string;
+  status?: string;
+}
+
+interface AnthropicOwnershipPreload extends OwnershipPreload {
+  org?: {
+    id?: string;
+    name?: string;
+  };
+  keys?: AnthropicOwnershipKey[];
+  error?: {
+    code: string;
+    message: string;
+  };
 }
 
 export const anthropicAdapter: Adapter = {
@@ -141,6 +174,154 @@ export const anthropicAdapter: Adapter = {
       }),
     };
   },
+
+  async preloadOwnership(ctx: AuthContext): Promise<OwnershipPreload> {
+    const orgRes = await request(`${ANTHROPIC_BASE}${ORG_ME_PATH}`, {
+      headers: authHeaders(ctx.token),
+    });
+    if (orgRes instanceof Error) return preloadError(networkError(orgRes));
+    if (!orgRes.ok) return preloadError(fromResponse(orgRes, "ownership preload"));
+
+    const org = (await orgRes.json()) as AnthropicOrgResponse;
+    const keys: AnthropicOwnershipKey[] = [];
+    let afterId: string | undefined;
+
+    for (;;) {
+      const params = new URLSearchParams({ limit: "1000", status: "active" });
+      if (afterId) params.set("after_id", afterId);
+      const res = await request(`${ANTHROPIC_BASE}${API_KEYS_PATH}?${params.toString()}`, {
+        headers: authHeaders(ctx.token),
+      });
+      if (res instanceof Error) return preloadError(networkError(res), org);
+      if (!res.ok) return preloadError(fromResponse(res, "ownership preload"), org);
+
+      const body = (await res.json()) as AnthropicListResponse;
+      for (const key of body.data ?? []) {
+        if (!key.id) continue;
+        keys.push({
+          id: key.id,
+          name: key.name,
+          workspaceId: key.workspace_id,
+          createdAt: key.created_at ?? key.createdAt,
+          partialKey: key.partial_key,
+          status: key.status,
+        });
+      }
+
+      if (!body.has_more) break;
+      afterId = body.last_id ?? body.data?.at(-1)?.id;
+      if (!afterId) break;
+    }
+
+    return { org: { id: org.id, name: org.name }, keys } satisfies AnthropicOwnershipPreload;
+  },
+
+  async ownedBy(
+    secretValue: string,
+    ctx: AuthContext,
+    opts: OwnershipOptions = {},
+  ): Promise<OwnershipResult> {
+    if (secretValue.startsWith("sk-ant-oat01-")) {
+      return ownershipResult(
+        "unknown",
+        false,
+        "low",
+        "OAuth-subject Anthropic keys are not organization API keys and should not normally be stored in Vercel env vars.",
+        "format-decode",
+      );
+    }
+
+    if (!isAnthropicApiKey(secretValue)) {
+      return ownershipResult(
+        "unknown",
+        false,
+        "low",
+        "Secret does not match a known Anthropic API key format.",
+        "format-decode",
+      );
+    }
+
+    const preload =
+      (opts.preload as AnthropicOwnershipPreload | undefined) ??
+      ((await anthropicAdapter.preloadOwnership?.(ctx)) as AnthropicOwnershipPreload | undefined);
+
+    if (preload?.error) {
+      return ownershipResult(
+        "unknown",
+        false,
+        preload.error.code === "rate_limited" ? "low" : "medium",
+        preload.error.message,
+        "list-match",
+      );
+    }
+
+    const keys = preload?.keys ?? [];
+    const envVarName = envVarNameFor(secretValue, opts.coLocatedVars);
+    const envCreatedAt = createdAtFor(envVarName, opts.coLocatedVars, preload);
+    const matches = keys.filter((key) =>
+      matchesOwnershipKey(secretValue, key, envVarName, envCreatedAt),
+    );
+
+    if (matches.length > 0) {
+      const keyNames = uniqueStrings(matches.map((key) => key.name).filter(isString));
+      const orgName = preload?.org?.name;
+      const evidenceParts = [
+        `Matched ${matches.length} active Anthropic API key record${matches.length === 1 ? "" : "s"} by admin list correlation`,
+      ];
+      if (orgName) evidenceParts.push(`org ${orgName}`);
+      if (keyNames.length > 0) evidenceParts.push(`key name ${keyNames.join(", ")}`);
+
+      return ownershipResult(
+        "self",
+        true,
+        "medium",
+        `${evidenceParts.join("; ")}.`,
+        "list-match",
+        "org",
+      );
+    }
+
+    const siblingOwnership = siblingOwnershipFor(opts.coLocatedVars, preload);
+    if (siblingOwnership === "self") {
+      return ownershipResult(
+        "self",
+        false,
+        "low",
+        "Inferred from sibling env vars in the same Vercel context; Anthropic does not expose org identity for standard API keys.",
+        "sibling-inheritance",
+        "project",
+      );
+    }
+    if (siblingOwnership === "other") {
+      return ownershipResult(
+        "other",
+        false,
+        "low",
+        "Sibling env vars in the same Vercel context resolved to another owner; Anthropic key ownership is inferred.",
+        "sibling-inheritance",
+        "project",
+      );
+    }
+
+    if (keys.length > 0) {
+      return ownershipResult(
+        "other",
+        false,
+        "low",
+        "No matching Anthropic API key record was found in the authenticated admin key list.",
+        "list-match",
+        "org",
+      );
+    }
+
+    return ownershipResult(
+      "unknown",
+      false,
+      "low",
+      "Anthropic admin key list was empty or unavailable, and no sibling ownership signal was provided.",
+      "list-match",
+    );
+  },
 };
 
 export default anthropicAdapter;
@@ -206,4 +387,170 @@ function fromResponse(res: Response, op: string) {
   return makeError("provider_error", `anthropic ${op}: ${res.status}`, "anthropic", {
     retryable: false,
   });
+}
+
+function preloadError(
+  error: ReturnType<typeof networkError> | ReturnType<typeof fromResponse>,
+  org?: AnthropicOrgResponse,
+): AnthropicOwnershipPreload {
+  const message =
+    error.code === "rate_limited"
+      ? "Anthropic ownership preload was rate limited."
+      : error.code === "provider_error"
+        ? "Anthropic provider unavailable during ownership preload."
+        : error.message;
+  return {
+    org: org ? { id: org.id, name: org.name } : undefined,
+    keys: [],
+    error: { code: error.code, message },
+  };
+}
+
+function ownershipResult(
+  verdict: OwnershipResult["verdict"],
+  adminCanBill: boolean,
+  confidence: OwnershipResult["confidence"],
+  evidence: string,
+  strategy: OwnershipResult["strategy"],
+  scope?: OwnershipResult["scope"],
+): OwnershipResult {
+  return { verdict, adminCanBill, confidence, evidence, strategy, scope };
+}
+
+function isAnthropicApiKey(value: string): boolean {
+  return value.startsWith("sk-ant-api03-") || value.startsWith("sk-ant-api-");
+}
+
+function matchesOwnershipKey(
+  secretValue: string,
+  key: AnthropicOwnershipKey,
+  envVarName?: string,
+  envCreatedAt?: string,
+): boolean {
+  if (key.partialKey && matchesPartialKey(secretValue, key.partialKey)) return true;
+  if (envVarName && key.name && looselyMatches(key.name, envVarName)) return true;
+  if (envCreatedAt && key.createdAt && closeInTime(key.createdAt, envCreatedAt, CLOSE_TIME_MS)) {
+    return true;
+  }
+  return false;
+}
+
+function matchesPartialKey(secretValue: string, partialKey: string): boolean {
+  const normalized = partialKey.trim();
+  if (normalized.length === 0) return false;
+  if (secretValue.includes(normalized)) return true;
+  const parts = normalized
+    .split("...")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (parts.length === 2)
+    return secretValue.startsWith(parts[0] ?? "") && secretValue.endsWith(parts[1] ?? "");
+  return false;
+}
+
+function looselyMatches(left: string, right: string): boolean {
+  const rawA = compactName(left);
+  const rawB = compactName(right);
+  if (rawA && rawB && rawA === rawB) return true;
+  const a = normalizeName(left);
+  const b = normalizeName(right);
+  if (!a || !b) return false;
+  return a === b || a.includes(b) || b.includes(a);
+}
+
+function normalizeName(value: string): string {
+  return compactName(value)
+    .replace(/^anthropic/, "")
+    .replace(/api/g, "")
+    .replace(/key/g, "");
+}
+
+function compactName(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+function closeInTime(left: string, right: string, toleranceMs: number): boolean {
+  const a = Date.parse(left);
+  const b = Date.parse(right);
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return false;
+  return Math.abs(a - b) <= toleranceMs;
+}
+
+function envVarNameFor(
+  secretValue: string,
+  coLocatedVars: Record<string, string> | undefined,
+): string | undefined {
+  if (!coLocatedVars) return undefined;
+  for (const [name, value] of Object.entries(coLocatedVars)) {
+    if (value === secretValue) return name;
+  }
+  return undefined;
+}
+
+function createdAtFor(
+  envVarName: string | undefined,
+  coLocatedVars: Record<string, string> | undefined,
+  preload: AnthropicOwnershipPreload | undefined,
+): string | undefined {
+  const preloadCreatedAt = firstPreloadString(preload, ["envCreatedAt", "createdAt"]);
+  if (preloadCreatedAt) return preloadCreatedAt;
+  if (!envVarName || !coLocatedVars) return undefined;
+  return (
+    coLocatedVars[`${envVarName}_CREATED_AT`] ??
+    coLocatedVars[`${envVarName}_UPDATED_AT`] ??
+    coLocatedVars.__createdAt ??
+    coLocatedVars.__updatedAt
+  );
+}
+
+function siblingOwnershipFor(
+  coLocatedVars: Record<string, string> | undefined,
+  preload: AnthropicOwnershipPreload | undefined,
+): "self" | "other" | "unknown" {
+  const preloadSignal = firstPreloadString(preload, [
+    "vercelSiblingOwnership",
+    "siblingOwnership",
+    "siblingVerdict",
+  ]);
+  if (isOwnershipSignal(preloadSignal)) return preloadSignal;
+  if (!coLocatedVars) return "unknown";
+
+  for (const [name, value] of Object.entries(coLocatedVars)) {
+    const normalized = name.toLowerCase();
+    if (
+      normalized.includes("ownership") &&
+      (normalized.includes("clerk") ||
+        normalized.includes("openai") ||
+        normalized.includes("sibling")) &&
+      isOwnershipSignal(value)
+    ) {
+      return value;
+    }
+  }
+
+  return "unknown";
+}
+
+function firstPreloadString(
+  preload: AnthropicOwnershipPreload | undefined,
+  keys: string[],
+): string | undefined {
+  if (!preload) return undefined;
+  for (const key of keys) {
+    const value = preload[key];
+    if (typeof value === "string" && value.length > 0) return value;
+  }
+  return undefined;
+}
+
+function isOwnershipSignal(value: unknown): value is "self" | "other" | "unknown" {
+  return value === "self" || value === "other" || value === "unknown";
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values)];
+}
+
+function isString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
 }
