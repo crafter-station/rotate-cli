@@ -52,6 +52,13 @@
         "@rotate/core": "workspace:*",
       },
     },
+    "packages/adapter-local-random": {
+      "name": "@rotate/adapter-local-random",
+      "version": "0.0.1",
+      "dependencies": {
+        "@rotate/core": "workspace:*",
+      },
+    },
     "packages/adapter-neon": {
       "name": "@rotate/adapter-neon",
       "version": "0.0.1",
@@ -136,6 +143,7 @@
         "@rotate/adapter-elevenlabs": "workspace:*",
         "@rotate/adapter-fal": "workspace:*",
         "@rotate/adapter-github-token": "workspace:*",
+        "@rotate/adapter-local-random": "workspace:*",
         "@rotate/adapter-neon": "workspace:*",
         "@rotate/adapter-neon-connection": "workspace:*",
         "@rotate/adapter-openai": "workspace:*",
@@ -223,6 +231,8 @@
     "@rotate/adapter-fal": ["@rotate/adapter-fal@workspace:packages/adapter-fal"],
 
     "@rotate/adapter-github-token": ["@rotate/adapter-github-token@workspace:packages/adapter-github-token"],
+
+    "@rotate/adapter-local-random": ["@rotate/adapter-local-random@workspace:packages/adapter-local-random"],
 
     "@rotate/adapter-neon": ["@rotate/adapter-neon@workspace:packages/adapter-neon"],
 

@@ -14,6 +14,7 @@ import clerkAdapter from "@rotate/adapter-clerk";
 import elevenLabsAdapter from "@rotate/adapter-elevenlabs";
 import falAdapter from "@rotate/adapter-fal";
 import githubTokenAdapter from "@rotate/adapter-github-token";
+import localRandomAdapter from "@rotate/adapter-local-random";
 import neonAdapter from "@rotate/adapter-neon";
 import neonConnectionAdapter from "@rotate/adapter-neon-connection";
 import openaiAdapter from "@rotate/adapter-openai";
@@ -51,6 +52,7 @@ export function registerAll(): void {
   registerAdapter(falAdapter);
   registerAdapter(elevenLabsAdapter);
   registerAdapter(tursoAdapter);
+  registerAdapter(localRandomAdapter);
 
   registerConsumer(vercelEnvConsumer);
   registerConsumer(githubActionsConsumer);
