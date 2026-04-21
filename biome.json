@@ -6,7 +6,7 @@
     "useIgnoreFile": true
   },
   "files": {
-    "ignore": ["dist/**", "node_modules/**", "*.generated.*"]
+    "ignore": ["dist/**", "node_modules/**", "*.generated.*", "landing/**"]
   },
   "organizeImports": {
     "enabled": true

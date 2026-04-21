@@ -51,6 +51,64 @@ export interface Adapter {
   verify(secret: Secret, ctx: AuthContext): Promise<RotationResult<boolean>>;
   revoke(secret: Secret, ctx: AuthContext): Promise<RotationResult<void>>;
   list?(filter: Record<string, string>, ctx: AuthContext): Promise<RotationResult<Secret[]>>;
+
+  /**
+   * Determine whether `secretValue` belongs to the account/org/workspace
+   * authenticated by `ctx`, BEFORE attempting rotation. Optional — adapters
+   * without a feasible strategy omit this method and the orchestrator
+   * treats the answer as `unknown`.
+   *
+   * `coLocatedVars` carries sibling env-vars from the same Vercel project
+   * (e.g. SUPABASE_URL is co-located with SUPABASE_SERVICE_ROLE_KEY). Adapters
+   * use it for sibling-inheritance strategies that avoid network calls.
+   *
+   * `preload` (returned from `preloadOwnership`, if present) holds the warm
+   * reverse-index built once per session — list of databases, projects, team
+   * ids, etc. Pass through to every ownership check.
+   */
+  ownedBy?(
+    secretValue: string,
+    ctx: AuthContext,
+    opts?: OwnershipOptions,
+  ): Promise<OwnershipResult>;
+
+  /**
+   * Build a reusable snapshot of the admin's resources (orgs, projects,
+   * databases, installations) that `ownedBy` can consult without making
+   * N calls per secret. Called once per `rotate` invocation, cached in
+   * `adminCtx` and fanned out to every subsequent ownership check.
+   *
+   * Adapters with 1-call introspection (OpenAI, Vercel token) can omit
+   * this — they hit their endpoint fresh per check since the cost is O(1)
+   * anyway.
+   */
+  preloadOwnership?(ctx: AuthContext): Promise<OwnershipPreload>;
+}
+
+export interface OwnershipOptions {
+  coLocatedVars?: Record<string, string>;
+  preload?: OwnershipPreload;
+}
+
+export type OwnershipPreload = Record<string, unknown>;
+
+export type OwnershipVerdict = "self" | "other" | "unknown";
+
+export interface OwnershipResult {
+  verdict: OwnershipVerdict;
+  /**
+   * Whether the admin has billing/management control of the secret. May be
+   * `false` even when `verdict === "self"` (e.g. user is a member but not
+   * admin of the GitHub org that holds an installation token).
+   */
+  adminCanBill: boolean;
+  scope?: "user" | "team" | "org" | "project";
+  teamRole?: "admin" | "member" | "viewer";
+  confidence: "high" | "medium" | "low";
+  /** Human-readable evidence string for audit logs and CLI output. */
+  evidence: string;
+  /** Strategy used, for telemetry/debugging. */
+  strategy: "format-decode" | "api-introspection" | "list-match" | "sibling-inheritance" | "prompt";
 }
 
 export interface ConsumerTarget {

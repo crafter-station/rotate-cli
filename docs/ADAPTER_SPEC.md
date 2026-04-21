@@ -84,6 +84,23 @@ export interface Adapter {
 
   /** List existing secrets matching a filter. Optional — used for incident mode. */
   list?(filter: Record<string, string>, ctx: AuthContext): Promise<RotationResult<Secret[]>>;
+
+  /**
+   * Determine whether a secret belongs to the account authenticated by `ctx`.
+   * Optional — adapters without a feasible strategy omit this method.
+   */
+  ownedBy?(
+    secretValue: string,
+    ctx: AuthContext,
+    opts?: OwnershipOptions,
+  ): Promise<OwnershipResult>;
+
+  /**
+   * Build a warm reverse-index for `ownedBy`. Called once per invocation,
+   * passed back as `opts.preload` to every subsequent ownership check.
+   * Adapters with O(1) introspection can omit this.
+   */
+  preloadOwnership?(ctx: AuthContext): Promise<OwnershipPreload>;
 }
 ```
 
@@ -94,6 +111,46 @@ export interface Adapter {
 - `revoke()` MUST be idempotent. If the secret is already gone, return `{ok: true}`.
 - Adapters MUST NOT persist secrets to disk — that's the orchestrator's job.
 - Adapters MUST NOT depend on other adapters.
+- `ownedBy()` MUST NOT mutate any provider state. Read-only only.
+
+## Ownership detection (optional)
+
+Before rotating, rotate-cli wants to know: "is this secret in MY account, or
+does it belong to a collaborator's account that I happen to have an admin key
+for?" Picking the wrong answer silently transfers billing and can break keys
+with scopes we can't replicate.
+
+Adapters answer this via `ownedBy()`. Strategies, ranked by cost:
+
+| Strategy | Cost | When applicable |
+|---|---|---|
+| `format-decode` | 0 network | Secret is a JWT with `iss` / `org_id` claim, OR an opaque URL with an owner-scoped hostname (`libsql://db-org.turso.io`, `ep-xxx.neon.tech`). |
+| `sibling-inheritance` | 0 network | Co-located env var in the same Vercel project (e.g. `SUPABASE_URL` sitting next to `SUPABASE_SERVICE_ROLE_KEY`) reveals ownership. |
+| `api-introspection` | 1 call | Provider exposes `GET /me` / `GET /user` that accepts the raw secret value as bearer and returns owner metadata. |
+| `list-match` | N warm + 0 check | `preloadOwnership()` fetches the admin's full list of secrets/databases/installations once; checks reduce to a Map lookup. |
+| `prompt` | 0 network, 1 human | Last resort for `manual-mode` adapters (v0.2). Not in v0.1. |
+
+**Return shape:**
+
+```ts
+interface OwnershipResult {
+  verdict: "self" | "other" | "unknown";
+  adminCanBill: boolean;         // can the admin actually rotate? (GitHub org-admin distinction)
+  scope?: "user" | "team" | "org" | "project";
+  teamRole?: "admin" | "member" | "viewer";
+  confidence: "high" | "medium" | "low";
+  evidence: string;              // human-readable for audit log
+  strategy: "format-decode" | "api-introspection" | "list-match" | "sibling-inheritance" | "prompt";
+}
+```
+
+**Rules:**
+- `verdict === "unknown"` MUST be returned (NOT thrown) when the adapter cannot determine. The orchestrator can decide whether to proceed based on `--force-rotate-unknown`.
+- `adminCanBill` gates the actual rotation. A `self` verdict with `adminCanBill: false` means "it's in our org but you're a member, not an admin — get someone else to rotate".
+- `confidence` downgrades: `high` for cryptographic / direct API response, `medium` for heuristic / sibling match, `low` for prompt-only.
+- `evidence` MUST be safe to print in a public audit log — no secret values, no PII beyond usernames the user would expect.
+
+See each provider's research note at `docs/adapter-research/ownership/<provider>.md` for the concrete strategy.
 
 ## Consumer interface
 
