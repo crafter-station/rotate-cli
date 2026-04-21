@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { getAuthDefinition } from "@rotate/core";
+import { registerAdapter, resetRegistry } from "@rotate/core/registry";
 import type { AuthContext, Secret } from "@rotate/core/types";
 import { tursoAdapter } from "../src/index.ts";
 
@@ -114,6 +116,30 @@ describe("adapter-turso.revoke", () => {
     const r = await tursoAdapter.revoke(secret, mockCtx);
     expect(r.ok).toBe(true);
     expect(calls.length).toBe(0);
+  });
+});
+
+describe("adapter-turso.auth", () => {
+  beforeEach(() => {
+    resetRegistry();
+    registerAdapter(tursoAdapter);
+    delete process.env.TURSO_PLATFORM_TOKEN;
+  });
+
+  afterEach(() => {
+    resetRegistry();
+    delete process.env.TURSO_PLATFORM_TOKEN;
+  });
+
+  test("resolves env auth through shared auth registry", async () => {
+    process.env.TURSO_PLATFORM_TOKEN = "test-token";
+    const ctx = await tursoAdapter.auth();
+    expect(ctx.kind).toBe("env");
+    expect(ctx.token).toBe("test-token");
+  });
+
+  test("registers auth definition with the adapter", () => {
+    expect(getAuthDefinition("turso")?.displayName).toBe("Turso");
   });
 });
 

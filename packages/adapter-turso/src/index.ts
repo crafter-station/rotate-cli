@@ -1,4 +1,4 @@
-import { makeError } from "@rotate/core";
+import { makeError, resolveRegisteredAuth } from "@rotate/core";
 import type {
   Adapter,
   AdapterError,
@@ -9,6 +9,7 @@ import type {
   RotationSpec,
   Secret,
 } from "@rotate/core/types";
+import { tursoAuthDefinition } from "./auth.ts";
 
 const TURSO_API_BASE = process.env.TURSO_API_URL ?? "https://api.turso.tech";
 
@@ -44,15 +45,11 @@ interface TursoOwnershipPreload extends OwnershipPreload {
 
 export const tursoAdapter: Adapter = {
   name: "turso",
+  authRef: "turso",
+  authDefinition: tursoAuthDefinition,
 
   async auth(): Promise<AuthContext> {
-    const envToken = process.env.TURSO_PLATFORM_TOKEN;
-    if (envToken) {
-      return { kind: "env", varName: "TURSO_PLATFORM_TOKEN", token: envToken };
-    }
-    throw new Error(
-      "turso auth unavailable: set TURSO_PLATFORM_TOKEN to a Turso Platform API token",
-    );
+    return resolveRegisteredAuth("turso");
   },
 
   async create(spec: RotationSpec, ctx: AuthContext): Promise<RotationResult<Secret>> {
