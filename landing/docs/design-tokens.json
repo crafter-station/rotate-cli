@@ -1,0 +1,112 @@
+{
+  "$schema": "https://tinte.dev/schemas/design-tokens-1.json",
+  "project": "rotate-cli",
+  "style": "manuscript-security",
+  "colors": {
+    "background": {
+      "primary": "#E8E1D3",
+      "secondary": "#D8D0BE",
+      "tertiary": "#A39B89"
+    },
+    "surface": {
+      "primary": "#F2EEE4",
+      "inverse": "#1A1612"
+    },
+    "accent": {
+      "primary": "#8A6E3B",
+      "secondary": "#B8954E",
+      "tertiary": "#4A3A28"
+    },
+    "text": {
+      "primary": "#1A1612",
+      "secondary": "#3A332B",
+      "muted": "#6B6253",
+      "inverse": "#E8E1D3"
+    },
+    "status": {
+      "critical": "#6E3A28",
+      "warn": "#8A6E3B",
+      "ok": "#4A3A28"
+    }
+  },
+  "typography": {
+    "fontFamily": {
+      "display": "EB Garamond, Playfair Display, Georgia, serif",
+      "body": "Instrument Sans, Inter, system-ui, sans-serif",
+      "mono": "JetBrains Mono, IBM Plex Mono, ui-monospace, monospace",
+      "hand": "Caveat, Kalam, cursive"
+    },
+    "fontSize": {
+      "hero": "72px",
+      "h1": "48px",
+      "h2": "32px",
+      "h3": "24px",
+      "body": "17px",
+      "small": "14px",
+      "micro": "12px",
+      "code": "15px"
+    },
+    "fontWeight": {
+      "bold": 600,
+      "semibold": 500,
+      "regular": 400
+    },
+    "lineHeight": {
+      "tight": 1.05,
+      "heading": 1.2,
+      "normal": 1.6,
+      "relaxed": 1.7
+    },
+    "letterSpacing": {
+      "display": "-0.02em",
+      "body": "0",
+      "small": "0.05em"
+    }
+  },
+  "spacing": {
+    "section": "96px",
+    "block": "48px",
+    "element": "24px",
+    "tight": "8px",
+    "micro": "4px"
+  },
+  "borderRadius": {
+    "card": "2px",
+    "button": "2px",
+    "pill": "9999px"
+  },
+  "shadow": {
+    "paper": "inset 0 0 40px rgba(26, 22, 18, 0.08)",
+    "card": "0 1px 0 rgba(26, 22, 18, 0.12), 0 8px 24px -12px rgba(26, 22, 18, 0.2)",
+    "ink": "0.5px 0 0 currentColor"
+  },
+  "animation": {
+    "duration": {
+      "fast": "150ms",
+      "normal": "300ms",
+      "slow": "600ms"
+    },
+    "easing": {
+      "default": "cubic-bezier(0.2, 0, 0.2, 1)",
+      "ink": "cubic-bezier(0.4, 0, 0.2, 1)"
+    }
+  },
+  "effects": [
+    "parchment-grain",
+    "edge-wear",
+    "ink-bleed",
+    "torn-edge",
+    "handwritten-annotation",
+    "terminal-block-in-parchment",
+    "scattered-card-rotation",
+    "bronze-dotted-underline",
+    "drop-cap-garamond",
+    "small-caps-labels"
+  ],
+  "composition": {
+    "alignment": "asymmetric-left-weighted",
+    "density": "comfortable-to-dense",
+    "rhythm": "irregular-8px-grid",
+    "focalPoint": "single-dark-silhouette-offset"
+  }
+}

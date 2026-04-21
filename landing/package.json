@@ -1,0 +1,23 @@
+{
+  "name": "rotate-cli-landing",
+  "type": "module",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "astro": "astro"
+  },
+  "dependencies": {
+    "@astrojs/vercel": "^10.0.4",
+    "@fontsource-variable/eb-garamond": "^5.2.7",
+    "@fontsource-variable/instrument-sans": "^5.2.8",
+    "@fontsource/caveat": "^5.2.8",
+    "@fontsource/jetbrains-mono": "^5.2.8",
+    "@tailwindcss/vite": "^4.2.3",
+    "@vercel/analytics": "^2.0.1",
+    "astro": "^6.1.8",
+    "tailwindcss": "^4.2.3"
+  }
+}

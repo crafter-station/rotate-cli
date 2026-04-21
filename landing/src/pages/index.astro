@@ -1,0 +1,274 @@
+---
+import Base from "../layouts/Base.astro";
+import KingMark from "../components/KingMark.astro";
+
+const adapters = [
+  { name: "clerk", covers: "CLERK_SECRET_KEY, webhook", tag: "auth" },
+  { name: "openai", covers: "admin keys via /v1/organization", tag: "ai" },
+  { name: "anthropic", covers: "admin API keys", tag: "ai" },
+  { name: "resend", covers: "RESEND_API_KEY", tag: "email" },
+  { name: "supabase", covers: "service role, anon, jwt", tag: "db" },
+  { name: "neon", covers: "project API keys", tag: "db" },
+  { name: "neon-connection", covers: "DATABASE_URL / POSTGRES_*", tag: "db" },
+  { name: "github-token", covers: "installation tokens", tag: "ci" },
+  { name: "vercel-token", covers: "VERCEL_TOKEN", tag: "infra" },
+  { name: "ai-gateway", covers: "AI_GATEWAY_API_KEY", tag: "ai" },
+  { name: "upstash", covers: "Redis / Vector REST tokens", tag: "cache" },
+  { name: "vercel-kv", covers: "legacy KV_* (alias)", tag: "cache" },
+  { name: "polar", covers: "OAT + webhook secrets", tag: "billing" },
+  { name: "fal", covers: "FAL_API_KEY", tag: "ai" },
+  { name: "elevenlabs", covers: "service-account keys", tag: "ai" },
+  { name: "turso", covers: "TURSO_AUTH_TOKEN + DATABASE_URL", tag: "db" },
+  { name: "local-random", covers: "SESSION / JWT / HMAC", tag: "app" },
+];
+
+const consumers = [
+  { name: "vercel-env", covers: "Vercel project env vars + redeploy" },
+  { name: "github-actions", covers: "repo/org secrets (sealed-box)" },
+  { name: "local-env", covers: ".env files (atomic write)" },
+];
+
+const rotations = [
+  { offset: "-1.5deg", translate: "0 6px" },
+  { offset: "0.8deg", translate: "-8px -2px" },
+  { offset: "-0.4deg", translate: "4px 0" },
+  { offset: "1.2deg", translate: "0 -4px" },
+  { offset: "-0.9deg", translate: "2px 6px" },
+];
+---
+
+<Base>
+  <!-- hero ------------------------------------------------------------------>
+  <section class="relative overflow-hidden border-b border-ink/10">
+    <div class="pointer-events-none absolute top-0 right-0 -translate-y-8 translate-x-12 opacity-[0.08] text-ink lg:opacity-[0.12]">
+      <KingMark />
+    </div>
+    <div class="mx-auto max-w-5xl px-6 pt-20 pb-24 lg:pt-32 lg:pb-32 relative">
+      <p class="label text-sm mb-6">
+        v0.1.0 · open source · pre-npm
+      </p>
+      <h1 class="max-w-3xl">
+        Agent-first secrets rotation.
+        <span class="block text-bronze italic font-normal mt-2">Local-first. Zero servers.</span>
+      </h1>
+      <p class="mt-8 max-w-2xl text-lg text-graphite">
+        <code class="bg-ink/5 px-1.5 py-0.5 rounded-[2px]">rotate-cli</code> is the first secrets rotation tool
+        built for the AI-native stack. Your master credentials never leave your machine —
+        borrowed from CLIs you already trust. Agents can rotate safely with hard guardrails.
+      </p>
+
+      <div class="mt-10 flex flex-wrap items-center gap-4">
+        <a
+          href="https://github.com/crafter-station/rotate-cli"
+          class="inline-flex items-center gap-2 bg-ink text-parchment px-5 py-3 rounded-[2px] no-underline hover:shadow-lg transition-shadow font-medium"
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.87 10.91.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.36-3.88-1.36-.53-1.33-1.29-1.68-1.29-1.68-1.05-.72.08-.71.08-.71 1.17.08 1.78 1.2 1.78 1.2 1.04 1.77 2.72 1.26 3.38.96.1-.75.4-1.26.73-1.55-2.55-.29-5.23-1.28-5.23-5.7 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11.05 11.05 0 0 1 5.78 0c2.21-1.49 3.18-1.18 3.18-1.18.63 1.59.23 2.76.11 3.05.74.8 1.19 1.83 1.19 3.09 0 4.43-2.69 5.4-5.25 5.69.41.35.77 1.03.77 2.09v3.1c0 .31.21.66.8.55 4.57-1.53 7.86-5.83 7.86-10.91C23.5 5.65 18.35.5 12 .5z"/>
+          </svg>
+          View on GitHub
+        </a>
+        <a href="#quickstart" class="text-ink hover:text-bronze no-underline px-3">
+          Quick start →
+        </a>
+      </div>
+
+      <p class="hand mt-10 text-xl">
+        built after the Vercel breach · april 2026
+      </p>
+    </div>
+  </section>
+
+  <!-- proof ----------------------------------------------------------------->
+  <section class="border-b border-ink/10 bg-parchment-cream/40">
+    <div class="mx-auto max-w-5xl px-6 py-16">
+      <p class="label mb-4">evidence</p>
+      <h2 class="max-w-3xl">
+        <span class="italic text-graphite">1,516</span> environment variables.
+        One command.
+      </h2>
+      <p class="mt-6 max-w-2xl text-graphite">
+        The April 2026 Vercel incident left one of us staring at 1,516 env vars flagged
+        <em>Need to Rotate</em> across 467 projects. <code class="bg-ink/5 px-1 rounded-[2px]">rotate-cli</code>
+        exists because rotating them by hand was a bad afternoon that nobody should repeat.
+      </p>
+
+      <div class="mt-10 grid grid-cols-2 md:grid-cols-4 gap-6">
+        <div>
+          <div class="font-display text-4xl text-ink">17</div>
+          <div class="label text-xs mt-1">adapters</div>
+        </div>
+        <div>
+          <div class="font-display text-4xl text-ink">3</div>
+          <div class="label text-xs mt-1">consumers</div>
+        </div>
+        <div>
+          <div class="font-display text-4xl text-ink">0</div>
+          <div class="label text-xs mt-1">servers</div>
+        </div>
+        <div>
+          <div class="font-display text-4xl text-bronze">MIT</div>
+          <div class="label text-xs mt-1">license</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- quickstart ----------------------------------------------------------->
+  <section id="quickstart" class="border-b border-ink/10">
+    <div class="mx-auto max-w-5xl px-6 py-20">
+      <p class="label mb-4">quick start</p>
+      <h2>Rotate a breach scope in four lines.</h2>
+      <p class="mt-4 max-w-2xl text-graphite">
+        Describe what you rotate, point <code class="bg-ink/5 px-1 rounded-[2px]">rotate</code>
+        at an incident file, and let the grace period keep production alive while consumers
+        redeploy.
+      </p>
+
+      <pre class="terminal mt-10"><code><span class="cmt"># 1. describe the secrets and their consumers</span>
+<span class="prompt">$</span> rotate init
+
+<span class="cmt"># 2. see the plan — no mutation</span>
+<span class="prompt">$</span> rotate plan --tag production
+
+<span class="cmt"># 3. respond to an incident</span>
+<span class="prompt">$</span> rotate incident <span class="str">.rotate/incidents/vercel-apr-2026.yaml</span> \
+    --yes --reason <span class="str">"vendor breach response"</span>
+
+<span class="cmt"># 4. close the rotation once deploys are healthy</span>
+<span class="prompt">$</span> rotate revoke rot_abc123
+</code></pre>
+
+      <p class="hand mt-6 text-lg">
+        no dashboard · no lock-in · one config file in your repo
+      </p>
+    </div>
+  </section>
+
+  <!-- adapters ------------------------------------------------------------->
+  <section class="border-b border-ink/10 bg-parchment-cream/30 relative">
+    <div class="mx-auto max-w-6xl px-6 py-20">
+      <p class="label mb-4">providers · v0.1</p>
+      <h2>17 adapters. Every one golpea la API publica.</h2>
+      <p class="mt-4 max-w-2xl text-graphite">
+        No SDK bloat. Each adapter is a single file implementing
+        <code class="bg-ink/5 px-1 rounded-[2px]">create / verify / revoke</code> against the
+        provider's documented REST surface. Providers without a rotation API land in v0.2
+        via human-in-the-loop adapters.
+      </p>
+
+      <div class="mt-12 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+        {adapters.map((a, i) => {
+          const r = rotations[i % rotations.length]!;
+          return (
+            <article
+              class="card p-5 transition-transform duration-500"
+              style={`transform: rotate(${r.offset}) translate(${r.translate});`}
+            >
+              <div class="flex items-baseline justify-between">
+                <h3 class="font-display text-xl text-ink">{a.name}</h3>
+                <span class="label text-[10px] text-bronze">{a.tag}</span>
+              </div>
+              <p class="mt-2 text-sm text-graphite">{a.covers}</p>
+            </article>
+          );
+        })}
+      </div>
+
+      <div class="mt-14 border-t border-ink/10 pt-8">
+        <p class="label mb-4">consumers</p>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+          {consumers.map((c) => (
+            <article class="card p-5">
+              <h3 class="font-display text-xl text-ink">{c.name}</h3>
+              <p class="mt-2 text-sm text-graphite">{c.covers}</p>
+            </article>
+          ))}
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- agent mode ----------------------------------------------------------->
+  <section class="border-b border-ink/10">
+    <div class="mx-auto max-w-5xl px-6 py-20">
+      <p class="label mb-4">agent mode</p>
+      <h2>Guardrails designed for Claude Code & Codex.</h2>
+      <p class="mt-4 max-w-2xl text-graphite drop-cap">
+        Set <code class="bg-ink/5 px-1 rounded-[2px]">ROTATE_CLI_AGENT_MODE=1</code>.
+        The CLI refuses to rotate without a <code class="bg-ink/5 px-1 rounded-[2px]">--reason</code>
+        that lands in the audit log, a hard cap on blast radius, and an append-only JSONL
+        trail. Revoking the old secret always takes an explicit
+        <code class="bg-ink/5 px-1 rounded-[2px]">--force-revoke</code> — agents can rotate
+        eagerly and revoke conservatively.
+      </p>
+
+      <pre class="terminal mt-10"><code><span class="prompt">$</span> <span class="kw">ROTATE_CLI_AGENT_MODE=1</span> rotate apply openai-prod \
+    --reason <span class="str">"vercel breach response 2026-04-19"</span> \
+    --max-rotations <span class="str">1</span> \
+    --audit-log ~/.kai/audit/rotate-$(date +%F).jsonl \
+    --yes
+</code></pre>
+
+      <ul class="mt-8 grid grid-cols-1 md:grid-cols-2 gap-4 text-sm text-graphite">
+        <li><strong class="text-ink">--reason required</strong> — ≥5 chars, lands in audit log</li>
+        <li><strong class="text-ink">Rate limit</strong> — max 1 rotation / minute / machine</li>
+        <li><strong class="text-ink">Consumer cap</strong> — max 50 per rotation</li>
+        <li><strong class="text-ink">--no-verify forbidden</strong> — never skip verify in agent mode</li>
+        <li><strong class="text-ink">--audit-log required</strong> — append-only JSONL</li>
+        <li><strong class="text-ink">--force-revoke</strong> — invalidate old secret explicitly</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- design principles ---------------------------------------------------->
+  <section class="border-b border-ink/10 bg-parchment-cream/30">
+    <div class="mx-auto max-w-5xl px-6 py-20">
+      <p class="label mb-4">design</p>
+      <h2>Local-first is not a feature. It's the point.</h2>
+      <p class="mt-4 max-w-2xl text-graphite">
+        rotate-cli has no servers. No SaaS dashboard. It does not phone home. It borrows
+        auth tokens from CLIs you already have installed (<code class="bg-ink/5 px-1 rounded-[2px]">vercel</code>,
+        <code class="bg-ink/5 px-1 rounded-[2px]">gh</code>, <code class="bg-ink/5 px-1 rounded-[2px]">clerk</code>)
+        or from env vars you provide.
+      </p>
+      <p class="mt-4 max-w-2xl text-graphite">
+        A centralized rotation service is itself a breach target — the exact pattern that
+        caused the Vercel incident. rotate-cli holds no keys between runs, only the plan.
+        When you are done rotating, there is nothing for an attacker to steal except your
+        own machine.
+      </p>
+      <p class="hand mt-8 text-xl">rotate keys, not trust.</p>
+    </div>
+  </section>
+
+  <!-- CTA ------------------------------------------------------------------>
+  <section>
+    <div class="mx-auto max-w-5xl px-6 py-24 text-center">
+      <h2 class="font-display italic">Read the code before you rotate anything.</h2>
+      <p class="mt-6 max-w-2xl mx-auto text-graphite">
+        rotate-cli is MIT-licensed. 17 adapters in v0.1. Tested with 136 unit tests but not
+        yet battle-tested against live rotations — we are smoke-testing through April 2026
+        before cutting npm.
+      </p>
+      <div class="mt-10 flex flex-wrap items-center justify-center gap-4">
+        <a
+          href="https://github.com/crafter-station/rotate-cli"
+          class="inline-flex items-center gap-2 bg-ink text-parchment px-6 py-3 rounded-[2px] no-underline font-medium hover:shadow-lg transition-shadow"
+        >
+          crafter-station/rotate-cli
+        </a>
+        <a href="https://crafterstation.com" class="text-ink hover:text-bronze no-underline">
+          built by Crafter Station →
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- footer --------------------------------------------------------------->
+  <footer class="border-t border-ink/10 bg-parchment-cream/40">
+    <div class="mx-auto max-w-6xl px-6 py-10 flex flex-wrap items-center justify-between gap-4 text-sm text-graphite-mid">
+      <p>MIT © {new Date().getFullYear()} Crafter Station</p>
+      <p class="label text-xs">v0.1.0 · pre-release</p>
+    </div>
+  </footer>
+</Base>
