@@ -16,3 +16,4 @@ export * from "./prompt-runtime.ts";
 export { runCli } from "./cli.ts";
 export * from "./current-value.ts";
 export * from "./scan.ts";
+export * from "./scan-cache.ts";
