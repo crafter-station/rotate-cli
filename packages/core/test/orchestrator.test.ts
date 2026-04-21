@@ -1,0 +1,197 @@
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { applyRotation, revokeRotation } from "../src/orchestrator.ts";
+import { registerAdapter, registerConsumer, resetRegistry } from "../src/registry.ts";
+import type {
+  Adapter,
+  AuthContext,
+  Consumer,
+  ConsumerTarget,
+  RotationSpec,
+  Secret,
+} from "../src/types.ts";
+
+const mockSecretValue = () => `sk_live_${Math.random().toString(36).slice(2)}`;
+
+function makeMockAdapter(): Adapter {
+  let created: Secret | undefined;
+  let revoked = false;
+  return {
+    name: "mock-provider",
+    async auth(): Promise<AuthContext> {
+      return { kind: "env", varName: "MOCK", token: "mock-token" };
+    },
+    async create(spec: RotationSpec) {
+      created = {
+        id: "key_123",
+        provider: "mock-provider",
+        value: mockSecretValue(),
+        metadata: { ...spec.metadata },
+        createdAt: new Date().toISOString(),
+      };
+      return { ok: true, data: created };
+    },
+    async verify(secret: Secret) {
+      return { ok: secret.value.startsWith("sk_live_"), data: true };
+    },
+    async revoke() {
+      revoked = true;
+      return { ok: true, data: undefined };
+    },
+    async list() {
+      return { ok: true, data: created ? [created] : [] };
+    },
+  };
+}
+
+function makeMockConsumer(name = "mock-consumer"): Consumer {
+  const stored = new Map<string, string>();
+  return {
+    name,
+    async auth(): Promise<AuthContext> {
+      return { kind: "env", varName: "MOCK_CONSUMER", token: "mock" };
+    },
+    async propagate(target: ConsumerTarget, secret: Secret) {
+      const key = `${target.params.project}:${target.params.var_name}`;
+      stored.set(key, secret.value);
+      return { ok: true, data: undefined };
+    },
+    async trigger() {
+      return { ok: true, data: undefined };
+    },
+    async verify(target: ConsumerTarget, secret: Secret) {
+      const key = `${target.params.project}:${target.params.var_name}`;
+      return { ok: true, data: stored.get(key) === secret.value };
+    },
+  };
+}
+
+describe("orchestrator.applyRotation", () => {
+  let stateDir: string;
+  beforeEach(() => {
+    resetRegistry();
+    stateDir = mkdtempSync(join(tmpdir(), "rotate-cli-test-"));
+    process.env.ROTATE_CLI_STATE_DIR = stateDir;
+  });
+  afterEach(() => {
+    rmSync(stateDir, { recursive: true, force: true });
+    delete process.env.ROTATE_CLI_STATE_DIR;
+  });
+
+  test("full happy-path rotation with 2 consumers", async () => {
+    registerAdapter(makeMockAdapter());
+    registerConsumer(makeMockConsumer("mock-consumer"));
+
+    const { rotation, envelopeStatus } = await applyRotation(
+      {
+        id: "primary",
+        adapter: "mock-provider",
+        metadata: { instance_id: "ins_test" },
+        consumers: [
+          { type: "mock-consumer", params: { project: "hack0", var_name: "API_KEY" } },
+          { type: "mock-consumer", params: { project: "tinte", var_name: "API_KEY" } },
+        ],
+      },
+      { reason: "unit test" },
+    );
+
+    expect(envelopeStatus).toBe("success");
+    expect(rotation.status).toBe("in_grace");
+    expect(rotation.newSecret?.value).toMatch(/^sk_live_/);
+    expect(rotation.consumers).toHaveLength(2);
+    for (const c of rotation.consumers) {
+      expect(c.status).toBe("synced");
+    }
+    expect(rotation.gracePeriodEndsAt).toBeTruthy();
+  });
+
+  test("partial success when one consumer fails", async () => {
+    registerAdapter(makeMockAdapter());
+    const failingConsumer: Consumer = {
+      name: "failing-consumer",
+      async auth(): Promise<AuthContext> {
+        return { kind: "env", varName: "X", token: "x" };
+      },
+      async propagate() {
+        return {
+          ok: false,
+          error: {
+            code: "provider_error",
+            message: "simulated failure",
+            provider: "failing-consumer",
+            retryable: true,
+          },
+        };
+      },
+    };
+    registerConsumer(makeMockConsumer("mock-consumer"));
+    registerConsumer(failingConsumer);
+
+    const { rotation, envelopeStatus } = await applyRotation(
+      {
+        id: "primary",
+        adapter: "mock-provider",
+        metadata: { instance_id: "ins_test" },
+        consumers: [
+          { type: "mock-consumer", params: { project: "hack0", var_name: "API_KEY" } },
+          { type: "failing-consumer", params: { project: "broken", var_name: "API_KEY" } },
+        ],
+      },
+      { reason: "partial test" },
+    );
+
+    expect(envelopeStatus).toBe("partial");
+    expect(rotation.consumers[0]?.status).toBe("synced");
+    expect(rotation.consumers[1]?.status).toBe("failed");
+  });
+});
+
+describe("orchestrator.revokeRotation", () => {
+  let stateDir: string;
+  beforeEach(() => {
+    resetRegistry();
+    stateDir = mkdtempSync(join(tmpdir(), "rotate-cli-test-"));
+    process.env.ROTATE_CLI_STATE_DIR = stateDir;
+  });
+  afterEach(() => {
+    rmSync(stateDir, { recursive: true, force: true });
+    delete process.env.ROTATE_CLI_STATE_DIR;
+  });
+
+  test("revoke blocked when not fully synced and not forced", async () => {
+    const adapter = makeMockAdapter();
+    registerAdapter(adapter);
+    registerConsumer(makeMockConsumer());
+    const { rotation } = await applyRotation({
+      id: "primary",
+      adapter: "mock-provider",
+      metadata: {},
+      consumers: [{ type: "mock-consumer", params: { project: "p", var_name: "K" } }],
+    });
+    // Simulate a pending consumer.
+    rotation.consumers[0]!.status = "propagated";
+    rotation.oldSecret = { ...rotation.newSecret!, id: "old_key" };
+
+    const result = await revokeRotation(rotation);
+    expect(result.ok).toBe(false);
+  });
+
+  test("revoke succeeds with force", async () => {
+    const adapter = makeMockAdapter();
+    registerAdapter(adapter);
+    registerConsumer(makeMockConsumer());
+    const { rotation } = await applyRotation({
+      id: "primary",
+      adapter: "mock-provider",
+      metadata: {},
+      consumers: [{ type: "mock-consumer", params: { project: "p", var_name: "K" } }],
+    });
+    rotation.oldSecret = { ...rotation.newSecret!, id: "old_key" };
+
+    const result = await revokeRotation(rotation, { force: true });
+    expect(result.ok).toBe(true);
+    expect(rotation.status).toBe("revoked");
+  });
+});

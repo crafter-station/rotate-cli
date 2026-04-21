@@ -1,0 +1,27 @@
+{
+  "name": "@rotate/core",
+  "version": "0.0.1",
+  "type": "module",
+  "bin": {
+    "rotate": "./src/bin.ts"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./types": "./src/types.ts",
+    "./envelope": "./src/envelope.ts",
+    "./orchestrator": "./src/orchestrator.ts",
+    "./agent-mode": "./src/agent-mode.ts",
+    "./config": "./src/config.ts",
+    "./checkpoints": "./src/checkpoints.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "commander": "^12.1.0",
+    "yaml": "^2.6.1",
+    "zod": "^3.24.1",
+    "picocolors": "^1.1.1"
+  }
+}
