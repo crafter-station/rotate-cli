@@ -361,6 +361,42 @@ export async function revokeRotation(
 }
 
 /**
+ * Run preloadOwnership() once per unique adapter referenced by `secrets`.
+ * Returns a Map<adapterName, preload> the caller passes back to each
+ * applyRotation() as `opts.ownershipPreload`.
+ *
+ * Adapters without preloadOwnership are skipped — they answer ownership
+ * questions with O(1) calls per check and don't benefit from warming.
+ *
+ * Errors in a single provider's preload do NOT abort the others. Failures
+ * are captured in `errors` and the Map entry is simply absent.
+ */
+export async function preloadOwnershipForSecrets(secrets: SecretConfig[]): Promise<{
+  map: Map<string, OwnershipPreload>;
+  errors: Map<string, string>;
+}> {
+  const uniqueProviders = [...new Set(secrets.map((s) => s.adapter))];
+  const map = new Map<string, OwnershipPreload>();
+  const errors = new Map<string, string>();
+
+  await Promise.all(
+    uniqueProviders.map(async (name) => {
+      const adapter = getAdapter(name);
+      if (!adapter?.preloadOwnership) return;
+      try {
+        const ctx = await adapter.auth();
+        const preload = await adapter.preloadOwnership(ctx);
+        map.set(name, preload);
+      } catch (cause) {
+        errors.set(name, String(cause));
+      }
+    }),
+  );
+
+  return { map, errors };
+}
+
+/**
  * Decide whether an ownership verdict should skip the rotation.
  * Returns `null` when the rotation should proceed.
  */

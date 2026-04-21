@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { applyRotation, revokeRotation } from "../src/orchestrator.ts";
+import { applyRotation, preloadOwnershipForSecrets, revokeRotation } from "../src/orchestrator.ts";
 import { registerAdapter, registerConsumer, resetRegistry } from "../src/registry.ts";
 import type {
   Adapter,
@@ -355,6 +355,58 @@ describe("orchestrator.applyRotation ownership gate", () => {
 
     expect(envelopeStatus).toBe("success");
     expect(rotation.ownership).toBeUndefined();
+  });
+
+  test("preloadOwnershipForSecrets calls preload once per unique adapter", async () => {
+    let calls = 0;
+    const makeAdapter = (name: string): Adapter => ({
+      ...makeMockAdapter(),
+      name,
+      async preloadOwnership() {
+        calls++;
+        return { adapter: name };
+      },
+    });
+    registerAdapter(makeAdapter("adapter-a"));
+    registerAdapter(makeAdapter("adapter-b"));
+
+    const { map, errors } = await preloadOwnershipForSecrets([
+      { id: "1", adapter: "adapter-a", metadata: {}, consumers: [] },
+      { id: "2", adapter: "adapter-a", metadata: {}, consumers: [] },
+      { id: "3", adapter: "adapter-b", metadata: {}, consumers: [] },
+    ]);
+
+    expect(calls).toBe(2);
+    expect(map.size).toBe(2);
+    expect(errors.size).toBe(0);
+    expect((map.get("adapter-a") as { adapter: string }).adapter).toBe("adapter-a");
+  });
+
+  test("preloadOwnershipForSecrets captures errors per-adapter without aborting", async () => {
+    const good: Adapter = {
+      ...makeMockAdapter(),
+      name: "good",
+      async preloadOwnership() {
+        return { ok: true };
+      },
+    };
+    const bad: Adapter = {
+      ...makeMockAdapter(),
+      name: "bad",
+      async preloadOwnership() {
+        throw new Error("boom");
+      },
+    };
+    registerAdapter(good);
+    registerAdapter(bad);
+
+    const { map, errors } = await preloadOwnershipForSecrets([
+      { id: "1", adapter: "good", metadata: {}, consumers: [] },
+      { id: "2", adapter: "bad", metadata: {}, consumers: [] },
+    ]);
+
+    expect(map.has("good")).toBe(true);
+    expect(errors.get("bad")).toContain("boom");
   });
 
   test("unavailable currentValue + skipUnknown → skip", async () => {

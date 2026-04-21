@@ -21,7 +21,7 @@ import { loadConfig, loadIncident, selectByIncident, selectByQuery } from "./con
 import { resolveCurrentValue } from "./current-value.ts";
 import { emit, makeEnvelope } from "./envelope.ts";
 import { EXIT, RotateError } from "./errors.ts";
-import { applyRotation, revokeRotation } from "./orchestrator.ts";
+import { applyRotation, preloadOwnershipForSecrets, revokeRotation } from "./orchestrator.ts";
 import { createPromptIO } from "./prompt.ts";
 import { listAdapters, listConsumers } from "./registry.ts";
 import type { PromptChoice, PromptIO } from "./types.ts";
@@ -347,6 +347,7 @@ export async function runCli(argv: string[]): Promise<void> {
           );
           return;
         }
+        const { map: preloadMap } = await preloadOwnershipForSecrets(selected);
         const results = [];
         for (const secret of selected) {
           const { value: currentValue } = await resolveCurrentValue(secret);
@@ -357,6 +358,7 @@ export async function runCli(argv: string[]): Promise<void> {
             parallel: opts.parallel,
             skipVerify: opts.verify === false,
             currentValue: currentValue ?? undefined,
+            ownershipPreload: preloadMap.get(secret.adapter),
           });
           results.push(r);
         }
@@ -590,6 +592,7 @@ export async function runCli(argv: string[]): Promise<void> {
         );
         return;
       }
+      const { map: preloadMap } = await preloadOwnershipForSecrets(selected);
       const results = [];
       for (const secret of selected) {
         const { value: currentValue } = await resolveCurrentValue(secret);
@@ -598,6 +601,7 @@ export async function runCli(argv: string[]): Promise<void> {
           agentMode: isAgentMode(),
           auditLog: globalOpts.auditLog,
           currentValue: currentValue ?? undefined,
+          ownershipPreload: preloadMap.get(secret.adapter),
         });
         results.push(r);
       }
