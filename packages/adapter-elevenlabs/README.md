@@ -59,6 +59,14 @@ The adapter stores provider metadata as strings to match `@rotate/core/types`:
 
 `hint`, `created_at_unix`, and disabled/count/hash fields are populated by `list()` when ElevenLabs returns them. The full secret value is only returned by `create()` and is redacted in `list()`.
 
+## Ownership detection
+
+`ownedBy()` uses one read-only API introspection call: `GET /v1/user` with the candidate key in the `xi-api-key` header. The response includes a `user_id`, seat type, and subscription tier, but ElevenLabs does not return a stable workspace id.
+
+The adapter compares the returned `user_id` against pre-seeded ownership context such as `knownUserIds` on the auth context or ownership preload passed by the caller. A match returns `self` with medium confidence. A miss returns `other` with medium confidence when ownership context exists. If the candidate key is rejected, the provider is unavailable, the response is malformed, or no pre-seeded context is available, the adapter returns `unknown` instead of throwing.
+
+For workspace service-account keys, a matching subscription tier plus a non-admin seat is treated as ambiguous when the `user_id` was not pre-seeded, so the result is `unknown`. This avoids claiming ownership from tier alone because different ElevenLabs workspaces can share the same plan tier.
+
 ## Config Example
 
 ```yaml

@@ -95,6 +95,104 @@ describe("adapter-elevenlabs.verify", () => {
   });
 });
 
+describe("adapter-elevenlabs.ownedBy", () => {
+  test("returns self when /v1/user user_id is pre-seeded", async () => {
+    mockFetch(
+      () =>
+        new Response(
+          JSON.stringify({
+            user_id: "user_self",
+            seat_type: "workspace_admin",
+            subscription: { tier: "Creator", status: "active" },
+          }),
+          { status: 200 },
+        ),
+    );
+    const result = await elevenlabsAdapter.ownedBy?.(" xi_candidate ", {
+      ...mockCtx,
+      knownUserIds: new Set(["user_self"]),
+      knownTiers: new Set(["Creator"]),
+    } as AuthContext);
+    expect(result?.verdict).toBe("self");
+    expect(result?.adminCanBill).toBe(true);
+    expect(result?.confidence).toBe("medium");
+    expect(result?.strategy).toBe("api-introspection");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.url).toBe("https://api.elevenlabs.io/v1/user");
+    expect((calls[0]?.init?.headers as Record<string, string>)?.["xi-api-key"]).toBe(
+      "xi_candidate",
+    );
+  });
+
+  test("returns other when /v1/user user_id is not pre-seeded", async () => {
+    mockFetch(
+      () =>
+        new Response(
+          JSON.stringify({
+            user_id: "user_elsewhere",
+            seat_type: null,
+            subscription: { tier: "Free", status: "active" },
+          }),
+          { status: 200 },
+        ),
+    );
+    const result = await elevenlabsAdapter.ownedBy?.("xi_candidate", {
+      ...mockCtx,
+      knownUserIds: ["user_self"],
+    } as AuthContext);
+    expect(result?.verdict).toBe("other");
+    expect(result?.adminCanBill).toBe(false);
+    expect(result?.confidence).toBe("medium");
+  });
+
+  test("returns unknown on 401", async () => {
+    mockFetch(() => new Response(JSON.stringify({ detail: "invalid_api_key" }), { status: 401 }));
+    const result = await elevenlabsAdapter.ownedBy?.("xi_revoked", {
+      ...mockCtx,
+      knownUserIds: ["user_self"],
+    } as AuthContext);
+    expect(result?.verdict).toBe("unknown");
+    expect(result?.adminCanBill).toBe(false);
+    expect(result?.confidence).toBe("low");
+  });
+
+  test("returns unknown on network error", async () => {
+    global.fetch = ((url: RequestInfo | URL, init?: RequestInit) => {
+      const u = typeof url === "string" ? url : url.toString();
+      calls.push({ url: u, init });
+      throw new Error("connection failed");
+    }) as FetchFn;
+    const result = await elevenlabsAdapter.ownedBy?.("xi_candidate", {
+      ...mockCtx,
+      knownUserIds: ["user_self"],
+    } as AuthContext);
+    expect(result?.verdict).toBe("unknown");
+    expect(result?.evidence).toBe("network error during ElevenLabs /v1/user ownership check");
+  });
+
+  test("returns unknown for ambiguous tier match without user_id match", async () => {
+    mockFetch(
+      () =>
+        new Response(
+          JSON.stringify({
+            user_id: "new_service_account",
+            seat_type: "workspace_member",
+            subscription: { tier: "Creator", status: "active" },
+          }),
+          { status: 200 },
+        ),
+    );
+    const result = await elevenlabsAdapter.ownedBy?.("xi_candidate", {
+      ...mockCtx,
+      knownUserIds: ["user_self"],
+      knownTiers: ["Creator"],
+    } as AuthContext);
+    expect(result?.verdict).toBe("unknown");
+    expect(result?.confidence).toBe("medium");
+    expect(result?.scope).toBe("team");
+  });
+});
+
 describe("adapter-elevenlabs.revoke", () => {
   test("is idempotent on 404", async () => {
     mockFetch(() => new Response("not found", { status: 404 }));

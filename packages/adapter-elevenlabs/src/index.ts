@@ -2,6 +2,8 @@ import { makeError } from "@rotate/core";
 import type {
   Adapter,
   AuthContext,
+  OwnershipOptions,
+  OwnershipResult,
   RotationResult,
   RotationSpec,
   Secret,
@@ -13,6 +15,17 @@ const PROVIDER = "elevenlabs";
 interface ElevenLabsCreateResponse {
   "xi-api-key"?: string;
   key_id?: string;
+}
+
+interface ElevenLabsUserResponse {
+  user_id?: string;
+  xi_api_key_preview?: string;
+  first_name?: string;
+  seat_type?: "workspace_admin" | "workspace_member" | "workspace_lite_member" | null;
+  subscription?: {
+    tier?: string;
+    status?: string;
+  };
 }
 
 interface ElevenLabsKeyEntry {
@@ -209,6 +222,76 @@ export const elevenlabsAdapter: Adapter = {
       }),
     };
   },
+
+  async ownedBy(
+    secretValue: string,
+    ctx: AuthContext,
+    opts?: OwnershipOptions,
+  ): Promise<OwnershipResult> {
+    const secret = secretValue.trim();
+    if (!secret) return ownershipUnknown("empty ElevenLabs key value", "low");
+
+    const ownershipContext = ownershipHints(ctx, opts);
+    const res = await request(`${ownershipContext.regionalBase}/v1/user`, {
+      headers: authHeaders(secret),
+    });
+
+    if (res instanceof Error) {
+      return ownershipUnknown("network error during ElevenLabs /v1/user ownership check", "low");
+    }
+    if (!res.ok) return ownershipFromFailedResponse(res);
+
+    const me = await safeJson<ElevenLabsUserResponse>(res);
+    if (!me?.user_id) {
+      return ownershipUnknown("ElevenLabs /v1/user response did not include a user_id", "low");
+    }
+
+    if (ownershipContext.knownUserIds.has(me.user_id)) {
+      return {
+        verdict: "self",
+        adminCanBill: true,
+        scope: me.seat_type ? "team" : "user",
+        teamRole:
+          me.seat_type === "workspace_admin" ? "admin" : me.seat_type ? "member" : undefined,
+        confidence: "medium",
+        evidence:
+          "ElevenLabs /v1/user returned a user_id present in the pre-seeded ownership context",
+        strategy: "api-introspection",
+      };
+    }
+
+    const tier = me.subscription?.tier;
+    if (
+      tier &&
+      ownershipContext.knownTiers.has(tier) &&
+      me.seat_type &&
+      me.seat_type !== "workspace_admin"
+    ) {
+      return ownershipUnknown(
+        "ElevenLabs /v1/user matched a known workspace tier for a non-admin seat, but user_id was not pre-seeded",
+        "medium",
+        "team",
+      );
+    }
+
+    if (ownershipContext.knownUserIds.size === 0) {
+      return ownershipUnknown(
+        "ElevenLabs /v1/user succeeded, but no pre-seeded ownership context was available",
+        "low",
+        me.seat_type ? "team" : "user",
+      );
+    }
+
+    return {
+      verdict: "other",
+      adminCanBill: false,
+      scope: me.seat_type ? "team" : "user",
+      confidence: "medium",
+      evidence:
+        "ElevenLabs /v1/user returned a user_id absent from the pre-seeded ownership context",
+      strategy: "api-introspection",
+    };
+  },
 };
 
 export default elevenlabsAdapter;
@@ -224,11 +307,91 @@ function authHeaders(token: string): Record<string, string> {
   };
 }
 
+function ownershipHints(ctx: AuthContext, opts?: OwnershipOptions) {
+  const ctxRecord = ctx as AuthContext & Record<string, unknown>;
+  const preload = opts?.preload ?? {};
+  const regionalBase =
+    firstString(preload.regionalBase, preload.baseUrl, ctxRecord.regionalBase, ctxRecord.baseUrl) ??
+    ELEVENLABS_BASE;
+
+  return {
+    regionalBase,
+    knownUserIds: stringSet(
+      preload.knownUserIds,
+      preload.userIds,
+      ctxRecord.knownUserIds,
+      ctxRecord.userIds,
+    ),
+    knownTiers: stringSet(preload.knownTiers, preload.tiers, ctxRecord.knownTiers, ctxRecord.tiers),
+  };
+}
+
+function ownershipUnknown(
+  evidence: string,
+  confidence: "medium" | "low",
+  scope?: "user" | "team",
+): OwnershipResult {
+  return {
+    verdict: "unknown",
+    adminCanBill: false,
+    scope,
+    confidence,
+    evidence,
+    strategy: "api-introspection",
+  };
+}
+
+function ownershipFromFailedResponse(res: Response): OwnershipResult {
+  const error = fromResponse(res, "ownedBy");
+  if (error.code === "auth_failed") {
+    return ownershipUnknown("candidate key was rejected by ElevenLabs /v1/user", "low");
+  }
+  if (error.code === "rate_limited") {
+    return ownershipUnknown("ElevenLabs ownership check was rate limited", "low");
+  }
+  if (error.code === "provider_error" && res.status >= 500) {
+    return ownershipUnknown("provider unavailable", "low");
+  }
+  return ownershipUnknown(`ElevenLabs ownership check returned HTTP ${res.status}`, "low");
+}
+
+function firstString(...values: unknown[]): string | undefined {
+  return values.find((value): value is string => typeof value === "string" && value.length > 0);
+}
+
+function stringSet(...values: unknown[]): Set<string> {
+  const result = new Set<string>();
+  for (const value of values) addStrings(result, value);
+  return result;
+}
+
+function addStrings(result: Set<string>, value: unknown): void {
+  if (typeof value === "string" && value.length > 0) {
+    result.add(value);
+    return;
+  }
+  if (value instanceof Set) {
+    for (const item of value) addStrings(result, item);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) addStrings(result, item);
+  }
+}
+
 async function request(url: string, init: RequestInit): Promise<Response | Error> {
   try {
     return await fetch(url, init);
   } catch (cause) {
     return cause instanceof Error ? cause : new Error(String(cause));
+  }
+}
+
+async function safeJson<T>(res: Response): Promise<T | undefined> {
+  try {
+    return (await res.json()) as T;
+  } catch {
+    return undefined;
   }
 }
 
