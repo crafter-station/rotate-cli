@@ -25,6 +25,8 @@ import { applyRotation, preloadOwnershipForSecrets, revokeRotation } from "./orc
 import { createPromptIO } from "./prompt.ts";
 import { getAdapter, listAdapters, listConsumers } from "./registry.ts";
 import {
+  createApplyProgressRenderer,
+  createOwnershipProgressRenderer,
   createScanProgressRenderer,
   renderApply,
   renderDoctor,
@@ -546,11 +548,24 @@ export async function runCli(argv: string[]): Promise<void> {
           );
           return;
         }
+        const applyPretty = shouldRenderPretty(program);
+        const applyProgress = applyPretty ? createApplyProgressRenderer() : null;
         const { map: preloadMap } = noOwnershipCheck
           ? { map: new Map() }
           : await preloadOwnershipForSecrets(selected);
+        applyProgress?.handle({ kind: "start", total: selected.length });
         const results = [];
-        for (const secret of selected) {
+        for (let i = 0; i < selected.length; i++) {
+          const secret = selected[i]!;
+          const index = i + 1;
+          applyProgress?.handle({
+            kind: "rotation-start",
+            index,
+            total: selected.length,
+            secretId: secret.id,
+            adapter: secret.adapter,
+          });
+          const rotationStarted = Date.now();
           const { value: currentValue } = noOwnershipCheck
             ? { value: null }
             : await resolveCurrentValue(secret);
@@ -567,7 +582,18 @@ export async function runCli(argv: string[]): Promise<void> {
             noOwnershipCheck,
           });
           results.push(r);
+          applyProgress?.handle({
+            kind: "rotation-done",
+            index,
+            total: selected.length,
+            secretId: secret.id,
+            status: r.envelopeStatus,
+            rotationId: r.rotation.id,
+            durationMs: Date.now() - rotationStarted,
+            note: r.rotation.skipReason?.kind ?? r.rotation.errors[0]?.message,
+          });
         }
+        applyProgress?.stop();
         const anyError = results.some((r) => r.envelopeStatus === "error");
         const anyPartial = results.some((r) => r.envelopeStatus === "partial");
         const anySkipped = results.some((r) => r.envelopeStatus === "skipped");
@@ -610,7 +636,7 @@ export async function runCli(argv: string[]): Promise<void> {
               error: c.error,
             })),
           }));
-        if (shouldRenderPretty(program)) {
+        if (applyPretty) {
           renderApply(successfulRotations, skipped, ownershipSummary, [
             ...nextActions,
             ...skipActions,
@@ -702,61 +728,136 @@ export async function runCli(argv: string[]): Promise<void> {
           );
           return;
         }
-        const { map: preloadMap, errors: preloadErrors } =
-          await preloadOwnershipForSecrets(selected);
-        const checks = await Promise.all(
-          selected.map(async (secret) => {
+        const pretty = shouldRenderPretty(program);
+        const progress = pretty ? createOwnershipProgressRenderer() : null;
+        const uniqueAdapters = [...new Set(selected.map((s) => s.adapter))];
+        progress?.handle({ kind: "preload-start", adapters: uniqueAdapters });
+
+        const preloadMap = new Map<string, import("./types.ts").OwnershipPreload>();
+        const preloadErrors = new Map<string, string>();
+        await Promise.all(
+          uniqueAdapters.map(async (name) => {
+            const adapter = getAdapter(name);
+            if (!adapter?.preloadOwnership) return;
+            const startedPreload = Date.now();
+            try {
+              const ctx = await adapter.auth();
+              const preload = await adapter.preloadOwnership(ctx);
+              preloadMap.set(name, preload);
+              progress?.handle({
+                kind: "preload-done",
+                adapter: name,
+                durationMs: Date.now() - startedPreload,
+                info: summarizePreload(preload),
+              });
+            } catch (cause) {
+              preloadErrors.set(name, String(cause));
+              progress?.handle({
+                kind: "preload-failed",
+                adapter: name,
+                durationMs: Date.now() - startedPreload,
+                error: String(cause),
+              });
+            }
+          }),
+        );
+
+        progress?.handle({ kind: "check-start", total: selected.length });
+        const counters = { self: 0, other: 0, unknown: 0, notChecked: 0 };
+        let done = 0;
+        const concurrency = 10;
+        const queue = [...selected.entries()];
+        const checks: Array<{
+          secret_id: string;
+          adapter: string;
+          verdict: "self" | "other" | "unknown" | null;
+          admin_can_bill?: boolean;
+          scope?: string;
+          confidence?: string;
+          strategy?: string;
+          evidence?: string;
+          reason?: string;
+        }> = new Array(selected.length);
+        async function worker(): Promise<void> {
+          while (queue.length > 0) {
+            const entry = queue.shift();
+            if (!entry) break;
+            const [idx, secret] = entry;
             const adapter = getAdapter(secret.adapter);
+            let check: (typeof checks)[number];
             if (!adapter?.ownedBy) {
-              return {
+              check = {
                 secret_id: secret.id,
                 adapter: secret.adapter,
                 verdict: null,
                 reason: "adapter has no ownedBy() method",
               };
+              counters.notChecked++;
+            } else {
+              const {
+                value: currentValue,
+                source,
+                error: resolveError,
+              } = await resolveCurrentValue(secret);
+              if (!currentValue) {
+                check = {
+                  secret_id: secret.id,
+                  adapter: secret.adapter,
+                  verdict: "unknown",
+                  reason:
+                    resolveError ??
+                    (source === "unavailable"
+                      ? "current value unavailable (set currentValueEnv or use vercel-env consumer)"
+                      : "current value empty"),
+                };
+                counters.unknown++;
+              } else {
+                try {
+                  const ctx = await adapter.auth();
+                  const ownership = await adapter.ownedBy(currentValue, ctx, {
+                    preload: preloadMap.get(secret.adapter),
+                  });
+                  check = {
+                    secret_id: secret.id,
+                    adapter: secret.adapter,
+                    verdict: ownership.verdict,
+                    admin_can_bill: ownership.adminCanBill,
+                    scope: ownership.scope,
+                    confidence: ownership.confidence,
+                    strategy: ownership.strategy,
+                    evidence: ownership.evidence,
+                  };
+                  if (ownership.verdict === "self") counters.self++;
+                  else if (ownership.verdict === "other") counters.other++;
+                  else counters.unknown++;
+                } catch (cause) {
+                  check = {
+                    secret_id: secret.id,
+                    adapter: secret.adapter,
+                    verdict: "unknown",
+                    reason: String(cause),
+                  };
+                  counters.unknown++;
+                }
+              }
             }
-            const {
-              value: currentValue,
-              source,
-              error: resolveError,
-            } = await resolveCurrentValue(secret);
-            if (!currentValue) {
-              return {
-                secret_id: secret.id,
-                adapter: secret.adapter,
-                verdict: "unknown" as const,
-                reason:
-                  resolveError ??
-                  (source === "unavailable"
-                    ? "current value unavailable (set currentValueEnv or use vercel-env consumer)"
-                    : "current value empty"),
-              };
-            }
-            try {
-              const ctx = await adapter.auth();
-              const ownership = await adapter.ownedBy(currentValue, ctx, {
-                preload: preloadMap.get(secret.adapter),
-              });
-              return {
-                secret_id: secret.id,
-                adapter: secret.adapter,
-                verdict: ownership.verdict,
-                admin_can_bill: ownership.adminCanBill,
-                scope: ownership.scope,
-                confidence: ownership.confidence,
-                strategy: ownership.strategy,
-                evidence: ownership.evidence,
-              };
-            } catch (cause) {
-              return {
-                secret_id: secret.id,
-                adapter: secret.adapter,
-                verdict: "unknown" as const,
-                reason: String(cause),
-              };
-            }
-          }),
+            checks[idx] = check;
+            done++;
+            progress?.handle({
+              kind: "check-progress",
+              done,
+              total: selected.length,
+              self: counters.self,
+              other: counters.other,
+              unknown: counters.unknown,
+              notChecked: counters.notChecked,
+            });
+          }
+        }
+        await Promise.all(
+          Array.from({ length: Math.min(concurrency, selected.length) }, () => worker()),
         );
+        progress?.stop();
 
         const summary = checks.reduce(
           (acc, c) => {
@@ -792,7 +893,7 @@ export async function runCli(argv: string[]): Promise<void> {
         }
 
         const preloadErrorsObj = Object.fromEntries(preloadErrors);
-        if (shouldRenderPretty(program)) {
+        if (pretty) {
           renderPreviewOwnership(checks, summary, preloadErrorsObj);
           process.exit(EXIT.OK);
         }
@@ -1224,6 +1325,18 @@ function buildOwnershipSummary(results: Array<{ rotation: { ownership?: { verdic
     else summary.not_checked++;
   }
   return summary;
+}
+
+function summarizePreload(preload: Record<string, unknown>): string | undefined {
+  const userId = typeof preload.userId === "string" ? preload.userId : undefined;
+  if (userId) return `user ${userId.slice(0, 12)}`;
+  const orgs = preload.organizations;
+  if (Array.isArray(orgs)) return `${orgs.length} org(s)`;
+  const workspaces = preload.workspaces;
+  if (Array.isArray(workspaces)) return `${workspaces.length} workspace(s)`;
+  const teams = preload.teams;
+  if (Array.isArray(teams)) return `${teams.length} team(s)`;
+  return undefined;
 }
 
 function buildSkipActions(

@@ -463,6 +463,234 @@ export function renderScanSummary(data: {
   );
 }
 
+// ---------------------------------------------------------------------------
+// who (preview-ownership) — live 2-phase progress
+// ---------------------------------------------------------------------------
+
+export type OwnershipProgressEvent =
+  | { kind: "preload-start"; adapters: string[] }
+  | { kind: "preload-done"; adapter: string; durationMs: number; info?: string }
+  | { kind: "preload-failed"; adapter: string; durationMs: number; error: string }
+  | { kind: "check-start"; total: number }
+  | {
+      kind: "check-progress";
+      done: number;
+      total: number;
+      self: number;
+      other: number;
+      unknown: number;
+      notChecked: number;
+    };
+
+export function createOwnershipProgressRenderer(): {
+  handle: (event: OwnershipProgressEvent) => void;
+  stop: () => void;
+} {
+  const frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+  const isTTY = Boolean(process.stdout.isTTY);
+  let frame = 0;
+  let activeLine = "";
+  let lineActive = false;
+  const startedAt = Date.now();
+
+  const interval = isTTY
+    ? setInterval(() => {
+        frame = (frame + 1) % frames.length;
+        if (activeLine) redraw();
+      }, 80)
+    : null;
+
+  function clearLine(): void {
+    if (!isTTY || !lineActive) return;
+    process.stdout.write("\r\x1b[2K");
+    lineActive = false;
+  }
+
+  function redraw(): void {
+    if (!isTTY || !activeLine) return;
+    clearLine();
+    process.stdout.write(activeLine.replace("__SPIN__", pc.cyan(frames[frame]!)));
+    lineActive = true;
+  }
+
+  function writeStatic(line: string): void {
+    clearLine();
+    process.stdout.write(`${line}\n`);
+    if (activeLine) redraw();
+  }
+
+  function bar(pct: number, width = 24): string {
+    const filled = Math.max(0, Math.min(width, Math.round(pct * width)));
+    return pc.cyan("█".repeat(filled)) + pc.dim("░".repeat(width - filled));
+  }
+
+  function handle(event: OwnershipProgressEvent): void {
+    if (event.kind === "preload-start") {
+      writeStatic(`${pc.bold("rotate-cli who")}\n\nPreloading ownership indexes...`);
+    } else if (event.kind === "preload-done") {
+      const duration =
+        event.durationMs > 1000
+          ? `${(event.durationMs / 1000).toFixed(1)}s`
+          : `${event.durationMs}ms`;
+      const info = event.info ? pc.dim(`· ${event.info}`) : "";
+      writeStatic(
+        `  ${pc.green("✓")} ${event.adapter.padEnd(20)} ${info} ${pc.dim(`· ${duration}`)}`,
+      );
+    } else if (event.kind === "preload-failed") {
+      writeStatic(
+        `  ${pc.yellow("⚠")} ${event.adapter.padEnd(20)} ${pc.dim(`· ${event.error.slice(0, 50)}`)}`,
+      );
+    } else if (event.kind === "check-start") {
+      writeStatic(`\nChecking ${event.total} secret(s)...`);
+      activeLine = `  __SPIN__ ${bar(0)}  0/${event.total}`;
+      redraw();
+    } else if (event.kind === "check-progress") {
+      const pct = event.total > 0 ? event.done / event.total : 0;
+      const elapsed = (Date.now() - startedAt) / 1000;
+      const rate = elapsed > 0 ? Math.round(event.done / elapsed) : 0;
+      const counters: string[] = [];
+      if (event.self > 0) counters.push(pc.green(`${event.self} self`));
+      if (event.other > 0) counters.push(pc.red(`${event.other} other`));
+      if (event.unknown > 0) counters.push(pc.yellow(`${event.unknown} unknown`));
+      if (event.notChecked > 0) counters.push(pc.dim(`${event.notChecked} no-check`));
+      const counterStr = counters.length > 0 ? `  ${counters.join(" · ")}` : "";
+      const rateStr = rate > 0 ? pc.dim(` · ${rate}/s`) : "";
+      activeLine = `  __SPIN__ ${bar(pct)}  ${event.done}/${event.total}${counterStr}${rateStr}`;
+      redraw();
+    }
+  }
+
+  function stop(): void {
+    if (interval) clearInterval(interval);
+    clearLine();
+    activeLine = "";
+  }
+
+  return { handle, stop };
+}
+
+// ---------------------------------------------------------------------------
+// apply — per-rotation progress
+// ---------------------------------------------------------------------------
+
+export type ApplyProgressEvent =
+  | { kind: "start"; total: number }
+  | { kind: "rotation-start"; index: number; total: number; secretId: string; adapter: string }
+  | {
+      kind: "rotation-step";
+      index: number;
+      step: "ownership" | "create" | "propagate" | "trigger" | "verify";
+    }
+  | {
+      kind: "rotation-done";
+      index: number;
+      total: number;
+      secretId: string;
+      status: "success" | "partial" | "error" | "skipped";
+      rotationId?: string;
+      durationMs: number;
+      note?: string;
+    };
+
+export function createApplyProgressRenderer(): {
+  handle: (event: ApplyProgressEvent) => void;
+  stop: () => void;
+} {
+  const frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+  const isTTY = Boolean(process.stdout.isTTY);
+  let frame = 0;
+  let active: {
+    index: number;
+    total: number;
+    secretId: string;
+    adapter: string;
+    step: string;
+  } | null = null;
+  let lineActive = false;
+
+  const interval = isTTY
+    ? setInterval(() => {
+        frame = (frame + 1) % frames.length;
+        if (active) drawActive();
+      }, 80)
+    : null;
+
+  function clearLine(): void {
+    if (!isTTY || !lineActive) return;
+    process.stdout.write("\r\x1b[2K");
+    lineActive = false;
+  }
+
+  function drawActive(): void {
+    if (!active || !isTTY) return;
+    clearLine();
+    const spin = pc.cyan(frames[frame]);
+    const progress = pc.dim(`[${active.index}/${active.total}]`);
+    const step = pc.dim(active.step);
+    process.stdout.write(
+      `  ${spin} ${progress} ${active.secretId.padEnd(30)} ${pc.dim(`[${active.adapter}]`)} ${step}`,
+    );
+    lineActive = true;
+  }
+
+  function writeStatic(line: string): void {
+    clearLine();
+    process.stdout.write(`${line}\n`);
+    if (active) drawActive();
+  }
+
+  function handle(event: ApplyProgressEvent): void {
+    if (event.kind === "start") {
+      writeStatic(`${pc.bold("rotate-cli apply")}\n\nApplying ${event.total} rotation(s)...`);
+    } else if (event.kind === "rotation-start") {
+      active = {
+        index: event.index,
+        total: event.total,
+        secretId: event.secretId,
+        adapter: event.adapter,
+        step: "starting...",
+      };
+      drawActive();
+    } else if (event.kind === "rotation-step") {
+      if (active && active.index === event.index) {
+        active.step = `${event.step}...`;
+        drawActive();
+      }
+    } else if (event.kind === "rotation-done") {
+      active = null;
+      const duration =
+        event.durationMs > 1000
+          ? `${(event.durationMs / 1000).toFixed(1)}s`
+          : `${event.durationMs}ms`;
+      const glyph = {
+        success: pc.green("✓"),
+        partial: pc.yellow("⚠"),
+        error: pc.red("✗"),
+        skipped: pc.dim("○"),
+      }[event.status];
+      const label = {
+        success: pc.green("rotated"),
+        partial: pc.yellow("partial"),
+        error: pc.red("failed"),
+        skipped: pc.dim("skipped"),
+      }[event.status];
+      const idPart = event.rotationId ? pc.dim(` · ${event.rotationId}`) : "";
+      const notePart = event.note ? pc.dim(` · ${event.note}`) : "";
+      writeStatic(
+        `  ${glyph} [${event.index}/${event.total}] ${pc.bold(event.secretId)} ${label}${idPart} ${pc.dim(`· ${duration}`)}${notePart}`,
+      );
+    }
+  }
+
+  function stop(): void {
+    if (interval) clearInterval(interval);
+    clearLine();
+    active = null;
+  }
+
+  return { handle, stop };
+}
+
 export function shouldRenderPretty(opts: { json?: boolean; pretty?: boolean }): boolean {
   // Explicit flags always win.
   if (opts.json) return false;
