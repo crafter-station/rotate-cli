@@ -114,6 +114,7 @@ export async function scanVercel(opts: ScanOptions): Promise<{
   projectsScanned: number;
 }> {
   const headers = { Authorization: `Bearer ${opts.token}` };
+  const DASHBOARD_BASE = "https://vercel.com";
 
   // 1. Enumerate scopes the token can actually see.
   //
@@ -154,6 +155,90 @@ export async function scanVercel(opts: ScanOptions): Promise<{
   for (const team of teams) {
     const teamStarted = Date.now();
     const teamIdQs = team.id ? `teamId=${team.id}` : "";
+
+    // Primary path: /api/dashboard/environment-variables returns every
+    // project's env vars in a single call and bypasses the 300-project cap
+    // of the public /v9/projects pagination. Same access token works.
+    const dashUrl = team.id
+      ? `${DASHBOARD_BASE}/api/dashboard/environment-variables?teamId=${team.id}`
+      : `${DASHBOARD_BASE}/api/dashboard/environment-variables`;
+    const dashRes = await fetch(dashUrl, { headers });
+    if (dashRes.ok) {
+      const dashBody = (await dashRes.json()) as {
+        projectEnvs?: Array<{
+          project: string;
+          envs: Array<{ id: string; key: string; type: string; target?: string[] }>;
+        }>;
+        meta?: { truncated?: boolean; totalProjectCount?: number };
+      };
+      const projectEnvs = dashBody.projectEnvs ?? [];
+
+      opts.onProgress?.({
+        kind: "team-start",
+        team: team.slug,
+        totalProjects: dashBody.meta?.totalProjectCount ?? projectEnvs.length,
+      });
+
+      let teamSecretsFound = 0;
+      for (let i = 0; i < projectEnvs.length; i++) {
+        const pe = projectEnvs[i]!;
+        for (const env of pe.envs) {
+          if (!opts.includePublic && env.key.startsWith("NEXT_PUBLIC_")) continue;
+          if (env.key === "NODE_ENV" || env.key === "VERCEL_ENV") continue;
+          const adapter = mapVarToAdapter(env.key);
+          if (!adapter) {
+            skipped.push({
+              var_name: env.key,
+              project: pe.project,
+              reason: "no adapter mapping",
+            });
+            continue;
+          }
+          const consumer: ConsumerTargetConfig = {
+            type: "vercel-env",
+            params: {
+              project: pe.project,
+              var_name: env.key,
+              ...(team.id ? { team: team.id } : {}),
+            },
+          };
+          secrets.push({
+            _scanned: true,
+            _project: pe.project,
+            _team: team.slug,
+            _varType: env.type,
+            id: `${adapter}-${pe.project}-${env.key}`.slice(0, 120),
+            adapter,
+            metadata: {},
+            tags:
+              env.type === "sensitive" || env.type === "secret" ? ["sensitive"] : ["non-sensitive"],
+            consumers: [consumer],
+          });
+          teamSecretsFound++;
+        }
+        projectsScanned++;
+        opts.onProgress?.({
+          kind: "team-progress",
+          team: team.slug,
+          projectsScanned: i + 1,
+          totalProjects: projectEnvs.length,
+          secretsSoFar: teamSecretsFound,
+        });
+      }
+
+      opts.onProgress?.({
+        kind: "team-done",
+        team: team.slug,
+        projectsScanned: projectEnvs.length,
+        secretsFound: teamSecretsFound,
+        durationMs: Date.now() - teamStarted,
+      });
+      continue;
+    }
+
+    // Fallback path (public API /v9/projects + /env per project). Capped at
+    // 300 projects by Vercel. Used only when the dashboard endpoint fails,
+    // e.g. token lacks web-session privileges.
     const projList: Array<{ id: string; name: string }> = [];
     let cursor: string | null = null;
     let paginationFailed = false;
