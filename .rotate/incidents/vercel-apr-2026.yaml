@@ -1,8 +1,13 @@
 # Vercel April 2026 Security Incident
 #
 # Scope: every non-sensitive env var across the Vercel workspaces touched by
-# the Context.ai OAuth compromise disclosed 2026-04-19. Any variable flagged
-# with tag `non-sensitive` in rotate.config.yaml is in scope.
+# the Context.ai OAuth compromise disclosed 2026-04-19. Any variable tagged
+# `non-sensitive` in rotate.config.yaml is in scope.
+#
+# Providers listed here are the ones rotate-cli v0.1 can rotate via API.
+# Dashboard-only providers (Stripe secret key, Sentry, GitHub OAuth App,
+# Firecrawl, Uploadthing, Groq, Twitch, Vercel Blob) land in v0.2 as
+# manual-mode adapters and are not part of this incident scope.
 #
 # Reference: https://vercel.com/kb/bulletin/vercel-april-2026-security-incident
 
@@ -13,22 +18,69 @@ reference: https://vercel.com/kb/bulletin/vercel-april-2026-security-incident
 severity: high
 
 scope:
+  # Auth & sessions
   - provider: clerk
     filter:
       tag: non-sensitive
 
+  # AI providers
   - provider: openai
     filter:
       tag: non-sensitive
-
   - provider: anthropic
     filter:
       tag: non-sensitive
+  - provider: elevenlabs
+    filter:
+      tag: non-sensitive
+  - provider: fal
+    filter:
+      tag: non-sensitive
+  - provider: ai-gateway
+    filter:
+      tag: non-sensitive
 
+  # Database
+  - provider: neon
+    filter:
+      tag: non-sensitive
+  - provider: neon-connection
+    filter:
+      tag: non-sensitive
+  - provider: supabase
+    filter:
+      tag: non-sensitive
+  - provider: turso
+    filter:
+      tag: non-sensitive
+
+  # Cache
+  - provider: upstash
+    filter:
+      tag: non-sensitive
+  - provider: vercel-kv
+    filter:
+      tag: non-sensitive
+
+  # Billing & webhooks
+  - provider: polar
+    filter:
+      tag: non-sensitive
+
+  # Email
   - provider: resend
     filter:
       tag: non-sensitive
 
-  - provider: supabase
+  # CI / infra tokens
+  - provider: github-token
+    filter:
+      tag: non-sensitive
+  - provider: vercel-token
+    filter:
+      tag: non-sensitive
+
+  # App-owned secrets (session, jwt, hmac)
+  - provider: local-random
     filter:
       tag: non-sensitive
