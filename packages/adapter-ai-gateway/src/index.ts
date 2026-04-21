@@ -1,7 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
-import { homedir, platform } from "node:os";
-import { join } from "node:path";
-import { makeError } from "@rotate/core";
+import { makeError, resolveRegisteredAuth } from "@rotate/core";
 import type {
   Adapter,
   AuthContext,
@@ -10,6 +7,7 @@ import type {
   RotationSpec,
   Secret,
 } from "@rotate/core/types";
+import { vercelAiGatewayAuthDefinition } from "./auth.ts";
 
 const VERCEL_BASE = process.env.VERCEL_API_URL ?? "https://api.vercel.com";
 const AI_GATEWAY_BASE = process.env.AI_GATEWAY_API_URL ?? "https://ai-gateway.vercel.sh";
@@ -41,24 +39,11 @@ interface VercelTeam {
 
 export const aiGatewayAdapter: Adapter = {
   name: PROVIDER,
+  authRef: PROVIDER,
+  authDefinition: vercelAiGatewayAuthDefinition,
 
   async auth(): Promise<AuthContext> {
-    for (const path of candidateAuthPaths()) {
-      if (!existsSync(path)) continue;
-      try {
-        const data = JSON.parse(readFileSync(path, "utf8")) as { token?: string };
-        if (data.token) {
-          return { kind: "cli-piggyback", tool: "vercel", tokenPath: path, token: data.token };
-        }
-      } catch {}
-    }
-
-    const envToken = process.env.VERCEL_TOKEN;
-    if (envToken) {
-      return { kind: "env", varName: "VERCEL_TOKEN", token: envToken };
-    }
-
-    throw new Error("vercel auth unavailable: run `vercel login` or set VERCEL_TOKEN");
+    return resolveRegisteredAuth(PROVIDER);
   },
 
   async create(spec: RotationSpec, ctx: AuthContext): Promise<RotationResult<Secret>> {
@@ -225,21 +210,6 @@ function authHeaders(ctx: AuthContext): Record<string, string> {
     Authorization: `Bearer ${ctx.token}`,
     "Content-Type": "application/json",
   };
-}
-
-function candidateAuthPaths(): string[] {
-  const home = homedir();
-  if (platform() === "darwin") {
-    return [
-      join(home, "Library", "Application Support", "com.vercel.cli", "auth.json"),
-      join(home, ".local", "share", "com.vercel.cli", "auth.json"),
-      join(home, ".config", "vercel", "auth.json"),
-    ];
-  }
-  return [
-    join(home, ".local", "share", "com.vercel.cli", "auth.json"),
-    join(home, ".config", "vercel", "auth.json"),
-  ];
 }
 
 function parseExpiresAt(value: string | undefined): number | undefined {

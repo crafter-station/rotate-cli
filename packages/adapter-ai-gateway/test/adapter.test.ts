@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { getAuthDefinition } from "@rotate/core";
+import { registerAdapter } from "@rotate/core/registry";
 import type { AuthContext, Secret } from "@rotate/core/types";
 import { aiGatewayAdapter } from "../src/index.ts";
 
@@ -17,10 +19,12 @@ function mockFetch(responder: (url: string, init?: RequestInit) => Response | Pr
 
 beforeEach(() => {
   calls = [];
+  delete process.env.VERCEL_TOKEN;
 });
 
 afterEach(() => {
   global.fetch = originalFetch;
+  delete process.env.VERCEL_TOKEN;
 });
 
 const mockCtx: AuthContext = { kind: "env", varName: "VERCEL_TOKEN", token: "vercel_test" };
@@ -105,6 +109,25 @@ describe("adapter-ai-gateway.revoke", () => {
     };
     const result = await aiGatewayAdapter.revoke(secret, mockCtx);
     expect(result.ok).toBe(true);
+  });
+});
+
+describe("adapter-ai-gateway.auth", () => {
+  test("resolves env auth through shared auth registry", async () => {
+    if (!getAuthDefinition("vercel-ai-gateway")) {
+      registerAdapter(aiGatewayAdapter);
+    }
+    process.env.VERCEL_TOKEN = "test-token";
+    const ctx = await aiGatewayAdapter.auth();
+    expect(ctx.kind).toBe("env");
+    expect(ctx.token).toBe("test-token");
+  });
+
+  test("registers auth definition with the adapter", () => {
+    if (!getAuthDefinition("vercel-ai-gateway")) {
+      registerAdapter(aiGatewayAdapter);
+    }
+    expect(getAuthDefinition("vercel-ai-gateway")?.displayName).toBe("Vercel AI Gateway");
   });
 });
 
