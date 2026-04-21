@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { getAuthDefinition } from "@rotate/core";
+import { registerAdapter, resetRegistry } from "@rotate/core/registry";
 import type { AuthContext, Secret } from "@rotate/core/types";
 import { elevenlabsAdapter } from "../src/index.ts";
 
@@ -17,10 +19,15 @@ function mockFetch(responder: (url: string, init?: RequestInit) => Response | Pr
 
 beforeEach(() => {
   calls = [];
+  resetRegistry();
+  registerAdapter(elevenlabsAdapter);
+  delete process.env.ELEVENLABS_ADMIN_KEY;
 });
 
 afterEach(() => {
   global.fetch = originalFetch;
+  resetRegistry();
+  delete process.env.ELEVENLABS_ADMIN_KEY;
 });
 
 const mockCtx: AuthContext = {
@@ -92,6 +99,19 @@ describe("adapter-elevenlabs.verify", () => {
     expect((calls[0]?.init?.headers as Record<string, string>)?.["xi-api-key"]).toBe(
       "xi_new_secret",
     );
+  });
+});
+
+describe("adapter-elevenlabs.auth", () => {
+  test("resolves env auth through shared auth registry", async () => {
+    process.env.ELEVENLABS_ADMIN_KEY = "test-token";
+    const ctx = await elevenlabsAdapter.auth();
+    expect(ctx.kind).toBe("env");
+    expect(ctx.token).toBe("test-token");
+  });
+
+  test("registers auth definition with the adapter", () => {
+    expect(getAuthDefinition("elevenlabs")?.displayName).toBe("ElevenLabs");
   });
 });
 

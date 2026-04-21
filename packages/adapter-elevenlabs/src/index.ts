@@ -1,4 +1,4 @@
-import { makeError } from "@rotate/core";
+import { makeError, resolveRegisteredAuth } from "@rotate/core";
 import type {
   Adapter,
   AuthContext,
@@ -8,6 +8,7 @@ import type {
   RotationSpec,
   Secret,
 } from "@rotate/core/types";
+import { elevenlabsAuthDefinition } from "./auth.ts";
 
 const ELEVENLABS_BASE = process.env.ELEVENLABS_API_URL ?? "https://api.elevenlabs.io";
 const PROVIDER = "elevenlabs";
@@ -45,13 +46,11 @@ type ElevenLabsListResponse = ElevenLabsKeyEntry[] | { api_keys?: ElevenLabsKeyE
 
 export const elevenlabsAdapter: Adapter = {
   name: PROVIDER,
+  authRef: PROVIDER,
+  authDefinition: elevenlabsAuthDefinition,
 
   async auth(): Promise<AuthContext> {
-    const envToken = process.env.ELEVENLABS_ADMIN_KEY;
-    if (envToken) {
-      return { kind: "env", varName: "ELEVENLABS_ADMIN_KEY", token: envToken };
-    }
-    throw new Error("elevenlabs auth unavailable: set ELEVENLABS_ADMIN_KEY");
+    return resolveRegisteredAuth(PROVIDER);
   },
 
   async create(spec: RotationSpec, ctx: AuthContext): Promise<RotationResult<Secret>> {
