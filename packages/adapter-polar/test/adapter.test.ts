@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { getAuthDefinition } from "@rotate/core/auth";
+import { registerAdapter } from "@rotate/core/registry";
 import type { AuthContext, Secret } from "@rotate/core/types";
 import { polarAdapter } from "../src/index.ts";
 
@@ -17,10 +19,13 @@ function mockFetch(responder: (url: string, init?: RequestInit) => Response | Pr
 
 beforeEach(() => {
   calls = [];
+  if (!getAuthDefinition("polar")) registerAdapter(polarAdapter);
+  delete process.env.POLAR_BOOTSTRAP_TOKEN;
 });
 
 afterEach(() => {
   global.fetch = originalFetch;
+  delete process.env.POLAR_BOOTSTRAP_TOKEN;
 });
 
 const mockCtx: AuthContext = {
@@ -274,5 +279,18 @@ describe("adapter-polar.revoke", () => {
     };
     const r = await polarAdapter.revoke(secret, mockCtx);
     expect(r.ok).toBe(true);
+  });
+});
+
+describe("adapter-polar.auth", () => {
+  test("resolves env auth through shared auth registry", async () => {
+    process.env.POLAR_BOOTSTRAP_TOKEN = "test-token";
+    const ctx = await polarAdapter.auth();
+    expect(ctx.kind).toBe("env");
+    expect(ctx.token).toBe("test-token");
+  });
+
+  test("registers auth definition with the adapter", () => {
+    expect(getAuthDefinition("polar")?.displayName).toBe("Polar");
   });
 });

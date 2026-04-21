@@ -1,4 +1,5 @@
 import { makeError } from "@rotate/core";
+import { resolveRegisteredAuth } from "@rotate/core/auth";
 import type {
   Adapter,
   AuthContext,
@@ -8,6 +9,7 @@ import type {
   RotationSpec,
   Secret,
 } from "@rotate/core/types";
+import { polarAuthDefinition } from "./auth.ts";
 
 const POLAR_BASE = process.env.POLAR_API_URL ?? "https://api.polar.sh/v1";
 
@@ -66,13 +68,11 @@ type PolarKind = "oat" | "webhook";
 
 export const polarAdapter: Adapter = {
   name: "polar",
+  authRef: "polar",
+  authDefinition: polarAuthDefinition,
 
   async auth(): Promise<AuthContext> {
-    const envToken = process.env.POLAR_BOOTSTRAP_TOKEN;
-    if (envToken) {
-      return { kind: "env", varName: "POLAR_BOOTSTRAP_TOKEN", token: envToken };
-    }
-    throw new Error("polar auth unavailable: set POLAR_BOOTSTRAP_TOKEN to a bootstrap OAT");
+    return resolveRegisteredAuth("polar");
   },
 
   async create(spec: RotationSpec, ctx: AuthContext): Promise<RotationResult<Secret>> {
