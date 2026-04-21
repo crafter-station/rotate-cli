@@ -80,6 +80,14 @@
         "@rotate/core": "workspace:*",
       },
     },
+    "packages/adapter-vercel-kv": {
+      "name": "@rotate/adapter-vercel-kv",
+      "version": "0.0.1",
+      "dependencies": {
+        "@rotate/adapter-upstash": "workspace:*",
+        "@rotate/core": "workspace:*",
+      },
+    },
     "packages/adapter-vercel-token": {
       "name": "@rotate/adapter-vercel-token",
       "version": "0.0.1",
@@ -104,6 +112,7 @@
         "@rotate/adapter-resend": "workspace:*",
         "@rotate/adapter-supabase": "workspace:*",
         "@rotate/adapter-upstash": "workspace:*",
+        "@rotate/adapter-vercel-kv": "workspace:*",
         "@rotate/adapter-vercel-token": "workspace:*",
         "@rotate/consumer-github-actions": "workspace:*",
         "@rotate/consumer-local-env": "workspace:*",
@@ -190,6 +199,8 @@
     "@rotate/adapter-supabase": ["@rotate/adapter-supabase@workspace:packages/adapter-supabase"],
 
     "@rotate/adapter-upstash": ["@rotate/adapter-upstash@workspace:packages/adapter-upstash"],
+
+    "@rotate/adapter-vercel-kv": ["@rotate/adapter-vercel-kv@workspace:packages/adapter-vercel-kv"],
 
     "@rotate/adapter-vercel-token": ["@rotate/adapter-vercel-token@workspace:packages/adapter-vercel-token"],
 

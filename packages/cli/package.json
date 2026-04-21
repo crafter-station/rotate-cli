@@ -25,6 +25,7 @@
     "@rotate/adapter-vercel-token": "workspace:*",
     "@rotate/adapter-ai-gateway": "workspace:*",
     "@rotate/adapter-upstash": "workspace:*",
+    "@rotate/adapter-vercel-kv": "workspace:*",
     "@rotate/consumer-vercel-env": "workspace:*",
     "@rotate/consumer-github-actions": "workspace:*",
     "@rotate/consumer-local-env": "workspace:*"

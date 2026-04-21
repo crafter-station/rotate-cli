@@ -18,6 +18,7 @@ import openaiAdapter from "@rotate/adapter-openai";
 import resendAdapter from "@rotate/adapter-resend";
 import supabaseAdapter from "@rotate/adapter-supabase";
 import upstashAdapter from "@rotate/adapter-upstash";
+import vercelKvAdapter from "@rotate/adapter-vercel-kv";
 import vercelTokenAdapter from "@rotate/adapter-vercel-token";
 
 import githubActionsConsumer from "@rotate/consumer-github-actions";
@@ -41,6 +42,7 @@ export function registerAll(): void {
   registerAdapter(vercelTokenAdapter);
   registerAdapter(aiGatewayAdapter);
   registerAdapter(upstashAdapter);
+  registerAdapter(vercelKvAdapter);
 
   registerConsumer(vercelEnvConsumer);
   registerConsumer(githubActionsConsumer);
