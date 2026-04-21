@@ -2,6 +2,8 @@ import { makeError } from "@rotate/core";
 import type {
   Adapter,
   AuthContext,
+  OwnershipPreload,
+  OwnershipResult,
   RotationResult,
   RotationSpec,
   Secret,
@@ -40,6 +42,24 @@ interface PolarWebhookEndpoint {
 interface PolarListResponse<T> {
   items?: T[];
   data?: T[];
+}
+
+interface PolarOrganization {
+  id: string;
+}
+
+interface PolarOwnedResource {
+  organization_id?: string;
+}
+
+interface PolarOwnershipPreload extends OwnershipPreload {
+  knownOrgIds: string[];
+  webhookSecretOrgIds: Record<string, string>;
+}
+
+interface NormalizedPolarOwnershipPreload {
+  knownOrgIds: Set<string>;
+  webhookSecretOrgIds: Record<string, string>;
 }
 
 type PolarKind = "oat" | "webhook";
@@ -90,6 +110,93 @@ export const polarAdapter: Adapter = {
     const kind = kindFromMetadata(filter);
     if (kind === "webhook") return listWebhookSecrets(filter, ctx);
     return listOrganizationAccessTokens(filter, ctx);
+  },
+
+  async ownedBy(secretValue: string, ctx: AuthContext, opts): Promise<OwnershipResult> {
+    if (secretValue.startsWith("polar_whs_")) {
+      const preload =
+        normalizeOwnershipPreload(opts?.preload) ??
+        normalizeOwnershipPreload(await buildOwnershipPreload(ctx));
+      if (!preload) {
+        return ownershipResult(
+          "unknown",
+          false,
+          "low",
+          "Could not load Polar webhook ownership index",
+          "list-match",
+        );
+      }
+      const orgId = preload.webhookSecretOrgIds[secretValue];
+      if (!orgId) {
+        return ownershipResult(
+          "unknown",
+          false,
+          "low",
+          "Polar webhook secret was not found in readable webhook endpoints",
+          "list-match",
+        );
+      }
+      const self = preload.knownOrgIds.has(orgId);
+      return ownershipResult(
+        self ? "self" : "other",
+        self,
+        "low",
+        self
+          ? "Polar webhook secret matched a readable endpoint in an admin organization"
+          : "Polar webhook secret matched a readable endpoint outside the admin organization set",
+        "list-match",
+      );
+    }
+
+    if (isPolarBearer(secretValue)) {
+      const knownOrgIds =
+        normalizeOwnershipPreload(opts?.preload)?.knownOrgIds ??
+        (await fetchKnownOrgIds(ctx.token));
+      if (!knownOrgIds) {
+        return ownershipResult(
+          "unknown",
+          false,
+          "low",
+          "Could not load Polar admin organizations",
+          "api-introspection",
+        );
+      }
+      const probe = await probeBearerOrganizationIds(secretValue);
+      if (probe.status !== "ok") {
+        return ownershipResult("unknown", false, "low", probe.evidence, "api-introspection");
+      }
+      if (probe.organizationIds.length === 0) {
+        return ownershipResult(
+          "unknown",
+          false,
+          "low",
+          "Polar bearer probe returned no organizations",
+          "api-introspection",
+        );
+      }
+      const self = probe.organizationIds.some((id) => knownOrgIds.has(id));
+      return ownershipResult(
+        self ? "self" : "other",
+        self,
+        "high",
+        self
+          ? "Polar bearer probe returned an organization visible to the admin token"
+          : "Polar bearer probe returned organizations outside the admin organization set",
+        "api-introspection",
+      );
+    }
+
+    return ownershipResult(
+      "unknown",
+      false,
+      "low",
+      "Secret does not match a known Polar credential prefix",
+      "api-introspection",
+    );
+  },
+
+  async preloadOwnership(ctx: AuthContext): Promise<OwnershipPreload> {
+    return buildOwnershipPreload(ctx);
   },
 };
 
@@ -306,6 +413,156 @@ async function listWebhookSecrets(
   };
 }
 
+async function buildOwnershipPreload(ctx: AuthContext): Promise<PolarOwnershipPreload> {
+  const knownOrgIds = await fetchKnownOrgIds(ctx.token);
+  if (!knownOrgIds) return { knownOrgIds: [], webhookSecretOrgIds: {} };
+  const webhookSecretOrgIds: Record<string, string> = {};
+  for (const orgId of knownOrgIds) {
+    const query = new URLSearchParams({ organization_id: orgId, page: "1", limit: "100" });
+    const res = await request(`${POLAR_BASE}/webhooks/endpoints?${query.toString()}`, {
+      headers: authHeaders(ctx.token),
+    });
+    if (res instanceof Error || !res.ok) continue;
+    const body = await parseListResponse<PolarWebhookEndpoint>(res);
+    if (!body) continue;
+    for (const endpoint of listItems(body)) {
+      if (isPlainWebhookSecret(endpoint.secret) && endpoint.organization_id) {
+        webhookSecretOrgIds[endpoint.secret] = endpoint.organization_id;
+      }
+    }
+  }
+  return { knownOrgIds: [...knownOrgIds], webhookSecretOrgIds };
+}
+
+async function fetchKnownOrgIds(token: string): Promise<Set<string> | undefined> {
+  const res = await request(`${POLAR_BASE}/organizations/`, {
+    headers: authHeaders(token),
+  });
+  if (res instanceof Error || !res.ok) return undefined;
+  const body = await parseListResponse<PolarOrganization>(res);
+  if (!body) return undefined;
+  return new Set(
+    listItems(body)
+      .map((org) => org.id)
+      .filter(Boolean),
+  );
+}
+
+async function probeBearerOrganizationIds(
+  token: string,
+): Promise<{ status: "ok"; organizationIds: string[] } | { status: "unknown"; evidence: string }> {
+  const orgProbe = await request(`${POLAR_BASE}/organizations/`, {
+    headers: authHeaders(token),
+  });
+  if (orgProbe instanceof Error) {
+    return { status: "unknown", evidence: "Polar bearer probe failed due to a network error" };
+  }
+  if (orgProbe.ok) {
+    const body = await parseListResponse<PolarOrganization>(orgProbe);
+    if (!body) {
+      return { status: "unknown", evidence: "Polar bearer probe returned invalid JSON" };
+    }
+    return {
+      status: "ok",
+      organizationIds: listItems(body)
+        .map((org) => org.id)
+        .filter(Boolean),
+    };
+  }
+  if (orgProbe.status === 403) {
+    return probeBearerResourceOrganizationIds(token);
+  }
+  return { status: "unknown", evidence: ownershipFailureEvidence(orgProbe, "bearer probe") };
+}
+
+async function probeBearerResourceOrganizationIds(
+  token: string,
+): Promise<{ status: "ok"; organizationIds: string[] } | { status: "unknown"; evidence: string }> {
+  for (const path of ["customers", "products"]) {
+    const res = await request(`${POLAR_BASE}/${path}/?limit=1`, {
+      headers: authHeaders(token),
+    });
+    if (res instanceof Error) {
+      return { status: "unknown", evidence: "Polar bearer fallback failed due to a network error" };
+    }
+    if (res.ok) {
+      const body = await parseListResponse<PolarOwnedResource>(res);
+      if (!body) {
+        return { status: "unknown", evidence: "Polar bearer fallback returned invalid JSON" };
+      }
+      return {
+        status: "ok",
+        organizationIds: listItems(body)
+          .map((resource) => resource.organization_id)
+          .filter((id): id is string => Boolean(id)),
+      };
+    }
+    if (res.status !== 403) {
+      return { status: "unknown", evidence: ownershipFailureEvidence(res, "bearer fallback") };
+    }
+  }
+  return {
+    status: "unknown",
+    evidence: "Polar bearer probe could not read organizations, customers, or products",
+  };
+}
+
+async function parseListResponse<T>(res: Response): Promise<PolarListResponse<T> | undefined> {
+  try {
+    return (await res.json()) as PolarListResponse<T>;
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeOwnershipPreload(
+  preload: OwnershipPreload | undefined,
+): NormalizedPolarOwnershipPreload | undefined {
+  const raw = preload as PolarOwnershipPreload | undefined;
+  if (!raw || !Array.isArray(raw.knownOrgIds)) return undefined;
+  return {
+    knownOrgIds: new Set(raw.knownOrgIds.filter((id): id is string => typeof id === "string")),
+    webhookSecretOrgIds:
+      raw.webhookSecretOrgIds && typeof raw.webhookSecretOrgIds === "object"
+        ? raw.webhookSecretOrgIds
+        : {},
+  };
+}
+
+function ownershipResult(
+  verdict: OwnershipResult["verdict"],
+  adminCanBill: boolean,
+  confidence: OwnershipResult["confidence"],
+  evidence: string,
+  strategy: OwnershipResult["strategy"],
+): OwnershipResult {
+  return {
+    verdict,
+    adminCanBill,
+    scope: "org",
+    confidence,
+    evidence,
+    strategy,
+  };
+}
+
+function ownershipFailureEvidence(res: Response, op: string): string {
+  if (res.status === 401 || res.status === 403) {
+    makeError("auth_failed", `polar ownership ${op}: ${res.status}`, "polar");
+    return "Polar ownership check could not authenticate the credential";
+  }
+  if (res.status === 429) {
+    makeError("rate_limited", `polar ownership ${op}: 429`, "polar");
+    return "Polar ownership check was rate limited";
+  }
+  if (res.status >= 500) {
+    makeError("provider_error", `polar ownership ${op}: ${res.status}`, "polar");
+    return "provider unavailable";
+  }
+  makeError("provider_error", `polar ownership ${op}: ${res.status}`, "polar");
+  return "Polar ownership check returned an unexpected provider response";
+}
+
 function authHeaders(token: string): Record<string, string> {
   return {
     Authorization: `Bearer ${token}`,
@@ -323,6 +580,14 @@ async function request(url: string, init: RequestInit): Promise<Response | Error
 
 function kindFromMetadata(metadata: Record<string, string>): PolarKind {
   return metadata.kind === "webhook" ? "webhook" : "oat";
+}
+
+function isPolarBearer(secretValue: string): boolean {
+  return /^polar_(oat|at_[uo]|pat)_/.test(secretValue);
+}
+
+function isPlainWebhookSecret(secretValue: unknown): secretValue is string {
+  return typeof secretValue === "string" && /^polar_whs_[A-Za-z0-9_-]+$/.test(secretValue);
 }
 
 function parseScopes(scopes?: string): string[] {

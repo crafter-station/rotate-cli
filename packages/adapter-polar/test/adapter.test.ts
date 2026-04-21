@@ -137,6 +137,131 @@ describe("adapter-polar.verify", () => {
   });
 });
 
+describe("adapter-polar.ownedBy", () => {
+  test("returns self when bearer token org intersects admin orgs", async () => {
+    mockFetch((url, init) => {
+      const authorization = (init?.headers as Record<string, string>)?.Authorization;
+      if (authorization === "Bearer polar_oat_bootstrap") {
+        return new Response(JSON.stringify({ items: [{ id: "org_self" }] }), { status: 200 });
+      }
+      expect(url).toContain("/v1/organizations/");
+      return new Response(JSON.stringify({ items: [{ id: "org_self" }] }), { status: 200 });
+    });
+
+    const result = await polarAdapter.ownedBy?.("polar_oat_candidate", mockCtx);
+
+    expect(result?.verdict).toBe("self");
+    expect(result?.adminCanBill).toBe(true);
+    expect(result?.confidence).toBe("high");
+    expect(result?.strategy).toBe("api-introspection");
+    expect(calls).toHaveLength(2);
+  });
+
+  test("returns other when bearer token org is outside admin orgs", async () => {
+    mockFetch((_, init) => {
+      const authorization = (init?.headers as Record<string, string>)?.Authorization;
+      if (authorization === "Bearer polar_oat_bootstrap") {
+        return new Response(JSON.stringify({ items: [{ id: "org_self" }] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ items: [{ id: "org_other" }] }), { status: 200 });
+    });
+
+    const result = await polarAdapter.ownedBy?.("polar_oat_candidate", mockCtx);
+
+    expect(result?.verdict).toBe("other");
+    expect(result?.adminCanBill).toBe(false);
+    expect(result?.confidence).toBe("high");
+  });
+
+  test("returns unknown on bearer auth failure", async () => {
+    mockFetch((_, init) => {
+      const authorization = (init?.headers as Record<string, string>)?.Authorization;
+      if (authorization === "Bearer polar_oat_bootstrap") {
+        return new Response(JSON.stringify({ items: [{ id: "org_self" }] }), { status: 200 });
+      }
+      return new Response("unauthorized", { status: 401 });
+    });
+
+    const result = await polarAdapter.ownedBy?.("polar_oat_candidate", mockCtx);
+
+    expect(result?.verdict).toBe("unknown");
+    expect(result?.adminCanBill).toBe(false);
+    expect(result?.evidence).toBe("Polar ownership check could not authenticate the credential");
+  });
+
+  test("returns unknown on network error", async () => {
+    mockFetch((_, init) => {
+      const authorization = (init?.headers as Record<string, string>)?.Authorization;
+      if (authorization === "Bearer polar_oat_bootstrap") {
+        return new Response(JSON.stringify({ items: [{ id: "org_self" }] }), { status: 200 });
+      }
+      throw new Error("socket closed");
+    });
+
+    const result = await polarAdapter.ownedBy?.("polar_oat_candidate", mockCtx);
+
+    expect(result?.verdict).toBe("unknown");
+    expect(result?.adminCanBill).toBe(false);
+    expect(result?.evidence).toBe("Polar bearer probe failed due to a network error");
+  });
+
+  test("matches webhook secrets from preload", async () => {
+    const result = await polarAdapter.ownedBy?.("polar_whs_self", mockCtx, {
+      preload: {
+        knownOrgIds: ["org_self"],
+        webhookSecretOrgIds: {
+          polar_whs_self: "org_self",
+        },
+      },
+    });
+
+    expect(result?.verdict).toBe("self");
+    expect(result?.confidence).toBe("low");
+    expect(result?.strategy).toBe("list-match");
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("adapter-polar.preloadOwnership", () => {
+  test("builds webhook secret index for admin orgs", async () => {
+    mockFetch((url) => {
+      if (url.includes("/v1/organizations/")) {
+        return new Response(JSON.stringify({ items: [{ id: "org_a" }, { id: "org_b" }] }), {
+          status: 200,
+        });
+      }
+      if (url.includes("organization_id=org_a")) {
+        return new Response(
+          JSON.stringify({
+            items: [
+              { id: "wh_a", organization_id: "org_a", secret: "polar_whs_a" },
+              { id: "wh_redacted", organization_id: "org_a", secret: "polar_whs_***" },
+            ],
+          }),
+          { status: 200 },
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          items: [{ id: "wh_b", organization_id: "org_b", secret: "polar_whs_b" }],
+        }),
+        { status: 200 },
+      );
+    });
+
+    const preload = await polarAdapter.preloadOwnership?.(mockCtx);
+
+    expect(preload).toEqual({
+      knownOrgIds: ["org_a", "org_b"],
+      webhookSecretOrgIds: {
+        polar_whs_a: "org_a",
+        polar_whs_b: "org_b",
+      },
+    });
+    expect(calls).toHaveLength(3);
+  });
+});
+
 describe("adapter-polar.revoke", () => {
   test("is idempotent on 404", async () => {
     mockFetch(() => new Response("not found", { status: 404 }));
