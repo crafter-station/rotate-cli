@@ -335,9 +335,12 @@ function truncate(s: string, max: number): string {
  * - Interactive TTY → pretty.
  */
 export function shouldRenderPretty(opts: { json?: boolean; pretty?: boolean }): boolean {
+  // Explicit flags always win.
   if (opts.json) return false;
   if (opts.pretty) return true;
+  // Agent mode always emits JSON (rotate-cli's agent-first contract).
   if (process.env.ROTATE_CLI_AGENT_MODE === "1") return false;
-  if (!process.stdout.isTTY) return false;
+  // Default: pretty. Matches sibling Crafter CLIs (spoti-cli, sunat-cli).
+  // If you pipe the output into another tool, pass --json explicitly.
   return true;
 }
