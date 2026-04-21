@@ -116,3 +116,115 @@ describe("adapter-turso.revoke", () => {
     expect(calls.length).toBe(0);
   });
 });
+
+describe("adapter-turso.ownedBy", () => {
+  test("returns self when a co-located Turso URL uses an admin organization", async () => {
+    mockFetch(() =>
+      Response.json({
+        organizations: [{ slug: "acme" }],
+      }),
+    );
+
+    const result = await tursoAdapter.ownedBy?.("eyJ.db.token", mockCtx, {
+      coLocatedVars: {
+        TURSO_DATABASE_URL: "libsql://main-acme.turso.io",
+      },
+    });
+
+    expect(result?.verdict).toBe("self");
+    expect(result?.adminCanBill).toBe(true);
+    expect(result?.confidence).toBe("high");
+    expect(result?.strategy).toBe("format-decode");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.url).toBe("https://api.turso.tech/v1/organizations");
+    expect((calls[0]?.init?.headers as Record<string, string>)?.Authorization).toBe(
+      "Bearer turso-platform-token",
+    );
+  });
+
+  test("returns other when the Turso URL organization is not visible to the admin token", async () => {
+    mockFetch(() =>
+      Response.json({
+        organizations: [{ slug: "acme" }],
+      }),
+    );
+
+    const result = await tursoAdapter.ownedBy?.("libsql://main-elsewhere.turso.io", mockCtx);
+
+    expect(result?.verdict).toBe("other");
+    expect(result?.adminCanBill).toBe(false);
+    expect(result?.confidence).toBe("high");
+    expect(result?.strategy).toBe("format-decode");
+  });
+
+  test("returns unknown when organization lookup is unauthorized", async () => {
+    mockFetch(() => new Response("unauthorized", { status: 401 }));
+
+    const result = await tursoAdapter.ownedBy?.("libsql://main-acme.turso.io", mockCtx);
+
+    expect(result?.verdict).toBe("unknown");
+    expect(result?.adminCanBill).toBe(false);
+    expect(result?.confidence).toBe("low");
+    expect(result?.evidence).toBe("admin Turso organization lookup failed");
+  });
+
+  test("returns unknown when organization lookup hits a network error", async () => {
+    mockFetch(() => {
+      throw new Error("socket closed");
+    });
+
+    const result = await tursoAdapter.ownedBy?.("libsql://main-acme.turso.io", mockCtx);
+
+    expect(result?.verdict).toBe("unknown");
+    expect(result?.adminCanBill).toBe(false);
+    expect(result?.confidence).toBe("low");
+    expect(result?.evidence).toBe("admin Turso organization lookup unavailable");
+  });
+
+  test("returns unknown for an orphan Turso-shaped JWT", async () => {
+    const payload = btoa(JSON.stringify({ exp: 4_102_444_800, iat: 1, p: {} }))
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/g, "");
+
+    const result = await tursoAdapter.ownedBy?.(`eyJ.${payload}.sig`, mockCtx);
+
+    expect(result?.verdict).toBe("unknown");
+    expect(result?.adminCanBill).toBe(false);
+    expect(result?.confidence).toBe("low");
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("adapter-turso.preloadOwnership", () => {
+  test("builds an organization and database hostname index", async () => {
+    mockFetch((url) => {
+      if (url.endsWith("/v1/organizations")) {
+        return Response.json({
+          organizations: [{ slug: "acme" }, { name: "team-b" }],
+        });
+      }
+      if (url.endsWith("/v1/organizations/acme/databases")) {
+        return Response.json({
+          databases: [{ Name: "main", Hostname: "main-acme.turso.io" }],
+        });
+      }
+      return Response.json({
+        databases: [{ name: "analytics", hostname: "analytics-team-b.turso.io" }],
+      });
+    });
+
+    const preload = await tursoAdapter.preloadOwnership?.(mockCtx);
+
+    expect(preload?.selfOrgSlugs).toEqual(["acme", "team-b"]);
+    expect(preload?.dbIndex).toEqual([
+      { org: "acme", db: "main", hostname: "main-acme.turso.io" },
+      { org: "team-b", db: "analytics", hostname: "analytics-team-b.turso.io" },
+    ]);
+    expect(calls.map((call) => call.url)).toEqual([
+      "https://api.turso.tech/v1/organizations",
+      "https://api.turso.tech/v1/organizations/acme/databases",
+      "https://api.turso.tech/v1/organizations/team-b/databases",
+    ]);
+  });
+});

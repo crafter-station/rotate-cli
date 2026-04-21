@@ -3,6 +3,8 @@ import type {
   Adapter,
   AdapterError,
   AuthContext,
+  OwnershipPreload,
+  OwnershipResult,
   RotationResult,
   RotationSpec,
   Secret,
@@ -12,6 +14,32 @@ const TURSO_API_BASE = process.env.TURSO_API_URL ?? "https://api.turso.tech";
 
 interface TursoTokenResponse {
   jwt?: string;
+}
+
+interface TursoOrganization {
+  name?: string;
+  slug?: string;
+}
+
+interface TursoOrganizationsResponse {
+  organizations?: Array<string | TursoOrganization>;
+}
+
+interface TursoDatabase {
+  Name?: string;
+  name?: string;
+  Hostname?: string;
+  hostname?: string;
+}
+
+interface TursoDatabasesResponse {
+  databases?: TursoDatabase[];
+}
+
+interface TursoOwnershipPreload extends OwnershipPreload {
+  selfOrgSlugs?: string[];
+  dbIndex?: Array<{ org: string; db: string; hostname: string }>;
+  error?: AdapterError;
 }
 
 export const tursoAdapter: Adapter = {
@@ -115,6 +143,109 @@ export const tursoAdapter: Adapter = {
   async revoke(_secret: Secret, _ctx: AuthContext): Promise<RotationResult<void>> {
     return { ok: true, data: undefined };
   },
+
+  async ownedBy(
+    secretValue: string,
+    ctx: AuthContext,
+    opts?: { coLocatedVars?: Record<string, string>; preload?: OwnershipPreload },
+  ): Promise<OwnershipResult> {
+    if (secretValue === ctx.token) {
+      return {
+        verdict: "self",
+        adminCanBill: true,
+        scope: "org",
+        confidence: "high",
+        evidence: "secret matches the active Turso Platform API token",
+        strategy: "format-decode",
+      };
+    }
+
+    const url = findLibsqlUrl(secretValue, opts?.coLocatedVars);
+    if (!url) {
+      if (isTursoShapedJwt(secretValue)) {
+        return unknownOwnership(
+          "Turso database auth tokens do not encode database or organization ownership; provide a co-located TURSO_DATABASE_URL",
+        );
+      }
+      return unknownOwnership("no Turso libSQL URL found for ownership detection");
+    }
+
+    const parsed = parseTursoUrl(url);
+    if (!parsed) return unknownOwnership("libSQL URL is not a Turso-managed hostname");
+
+    const preload = normalizePreload(opts?.preload);
+    const indexed = preload.dbIndex.get(parsed.host);
+    if (indexed) {
+      return {
+        verdict: "self",
+        adminCanBill: true,
+        scope: "org",
+        confidence: "high",
+        evidence: `Turso hostname ${parsed.host} matches database ${indexed.db} in admin organization ${indexed.org}`,
+        strategy: "list-match",
+      };
+    }
+
+    let selfOrgSlugs = preload.selfOrgSlugs;
+    if (selfOrgSlugs.size === 0 && !opts?.preload) {
+      const loaded = await loadSelfOrgSlugs(ctx);
+      if (loaded.error) {
+        return unknownOwnership(ownershipErrorEvidence(loaded.error));
+      }
+      selfOrgSlugs = loaded.selfOrgSlugs;
+    }
+
+    if (selfOrgSlugs.size === 0) {
+      return unknownOwnership("admin Turso organizations were unavailable for comparison");
+    }
+
+    if (selfOrgSlugs.has(parsed.org)) {
+      return {
+        verdict: "self",
+        adminCanBill: true,
+        scope: "org",
+        confidence: "high",
+        evidence: `Turso URL hostname declares organization ${parsed.org}, which is visible to the admin token`,
+        strategy: "format-decode",
+      };
+    }
+
+    return {
+      verdict: "other",
+      adminCanBill: false,
+      scope: "org",
+      confidence: "high",
+      evidence: `Turso URL hostname declares organization ${parsed.org}, which is not visible to the admin token`,
+      strategy: "format-decode",
+    };
+  },
+
+  async preloadOwnership(ctx: AuthContext): Promise<OwnershipPreload> {
+    const orgs = await loadSelfOrgSlugs(ctx);
+    if (orgs.error) return { selfOrgSlugs: [], dbIndex: [], error: orgs.error };
+
+    const dbIndex: Array<{ org: string; db: string; hostname: string }> = [];
+    for (const org of orgs.selfOrgSlugs) {
+      const res = await request(
+        `${TURSO_API_BASE}/v1/organizations/${encodeURIComponent(org)}/databases`,
+        {
+          method: "GET",
+          headers: authHeaders(ctx.token),
+        },
+      );
+      if (res instanceof Error) continue;
+      if (!res.ok) continue;
+
+      const data = (await res.json()) as TursoDatabasesResponse;
+      for (const db of data.databases ?? []) {
+        const name = db.Name ?? db.name;
+        const hostname = db.Hostname ?? db.hostname;
+        if (name && hostname) dbIndex.push({ org, db: name, hostname });
+      }
+    }
+
+    return { selfOrgSlugs: [...orgs.selfOrgSlugs], dbIndex };
+  },
 };
 
 export default tursoAdapter;
@@ -191,4 +322,157 @@ function fromResponse(res: Response, op: string) {
   return makeError("provider_error", `turso ${op}: ${res.status}`, "turso", {
     retryable: false,
   });
+}
+
+function findLibsqlUrl(
+  secretValue: string,
+  coLocatedVars: Record<string, string> | undefined,
+): string | undefined {
+  if (looksLikeLibsqlUrl(secretValue)) return secretValue;
+  if (!coLocatedVars) return undefined;
+
+  const exact = coLocatedVars.TURSO_DATABASE_URL ?? coLocatedVars.DATABASE_URL;
+  if (exact && looksLikeLibsqlUrl(exact)) return exact;
+
+  for (const [key, value] of Object.entries(coLocatedVars)) {
+    const normalized = key.toUpperCase();
+    if (normalized.includes("TURSO") && normalized.includes("URL") && looksLikeLibsqlUrl(value)) {
+      return value;
+    }
+  }
+
+  for (const [key, value] of Object.entries(coLocatedVars)) {
+    if (key.toUpperCase().endsWith("DATABASE_URL") && looksLikeLibsqlUrl(value)) return value;
+  }
+
+  return undefined;
+}
+
+function looksLikeLibsqlUrl(value: string): boolean {
+  return /^libsql:\/\//i.test(value);
+}
+
+function parseTursoUrl(value: string): { db: string; host: string; org: string } | undefined {
+  try {
+    const url = new URL(value.replace(/^libsql:\/\//i, "https://"));
+    const host = url.host.toLowerCase();
+    const suffix = ".turso.io";
+    if (!host.endsWith(suffix)) return undefined;
+
+    const hostname = host.slice(0, -suffix.length);
+    const lastDash = hostname.lastIndexOf("-");
+    if (lastDash <= 0 || lastDash === hostname.length - 1) return undefined;
+
+    return {
+      db: hostname.slice(0, lastDash),
+      org: hostname.slice(lastDash + 1),
+      host,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizePreload(preload: OwnershipPreload | undefined): {
+  selfOrgSlugs: Set<string>;
+  dbIndex: Map<string, { org: string; db: string; hostname: string }>;
+} {
+  const typed = preload as TursoOwnershipPreload | undefined;
+  return {
+    selfOrgSlugs: new Set((typed?.selfOrgSlugs ?? []).filter(isNonEmptyString)),
+    dbIndex: new Map(
+      (typed?.dbIndex ?? [])
+        .filter((entry) => entry.org && entry.db && entry.hostname)
+        .map((entry) => [entry.hostname.toLowerCase(), entry]),
+    ),
+  };
+}
+
+async function loadSelfOrgSlugs(ctx: AuthContext): Promise<{
+  selfOrgSlugs: Set<string>;
+  error?: AdapterError;
+}> {
+  const res = await request(`${TURSO_API_BASE}/v1/organizations`, {
+    method: "GET",
+    headers: authHeaders(ctx.token),
+  });
+  if (res instanceof Error) {
+    return {
+      selfOrgSlugs: new Set(),
+      error: makeError("network_error", `turso ownership: ${res.message}`, "turso", {
+        cause: res,
+      }),
+    };
+  }
+  if (!res.ok) {
+    return {
+      selfOrgSlugs: new Set(),
+      error: ownershipErrorFromResponse(res),
+    };
+  }
+
+  const data = (await res.json()) as TursoOrganizationsResponse | Array<string | TursoOrganization>;
+  const organizations = Array.isArray(data) ? data : (data.organizations ?? []);
+  return {
+    selfOrgSlugs: new Set(
+      organizations
+        .map((org) => (typeof org === "string" ? org : (org.slug ?? org.name)))
+        .filter(isNonEmptyString),
+    ),
+  };
+}
+
+function ownershipErrorFromResponse(res: Response): AdapterError {
+  if (res.status === 401 || res.status === 403) {
+    return makeError("auth_failed", `turso ownership: ${res.status}`, "turso");
+  }
+  if (res.status === 429) return makeError("rate_limited", "turso ownership: 429", "turso");
+  if (res.status >= 500) {
+    return makeError("provider_error", `turso ownership: ${res.status}`, "turso");
+  }
+  return makeError("provider_error", `turso ownership: ${res.status}`, "turso", {
+    retryable: false,
+  });
+}
+
+function ownershipErrorEvidence(error: AdapterError): string {
+  if (error.code === "provider_error") return "provider unavailable";
+  if (error.code === "rate_limited") return "ownership check rate limited";
+  if (error.code === "auth_failed") return "admin Turso organization lookup failed";
+  return "admin Turso organization lookup unavailable";
+}
+
+function unknownOwnership(evidence: string): OwnershipResult {
+  return {
+    verdict: "unknown",
+    adminCanBill: false,
+    confidence: "low",
+    evidence,
+    strategy: "format-decode",
+  };
+}
+
+function isTursoShapedJwt(value: string): boolean {
+  const parts = value.split(".");
+  const header = parts[0];
+  const payloadSegment = parts[1];
+  if (!header?.startsWith("eyJ") || !payloadSegment) return false;
+  const payload = decodeJwtPayload(payloadSegment);
+  return Boolean(
+    payload && typeof payload.exp === "number" && ("p" in payload || "iat" in payload),
+  );
+}
+
+function decodeJwtPayload(segment: string): Record<string, unknown> | undefined {
+  try {
+    const normalized = segment.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+    return JSON.parse(atob(padded)) as Record<string, unknown>;
+  } catch {
+    return undefined;
+  }
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
 }
