@@ -5,20 +5,28 @@
   "exports": {
     ".": "./src/index.ts",
     "./types": "./src/types.ts",
+    "./auth": "./src/auth.ts",
+    "./auth-store": "./src/auth-store.ts",
     "./envelope": "./src/envelope.ts",
+    "./registry": "./src/registry.ts",
     "./orchestrator": "./src/orchestrator.ts",
     "./agent-mode": "./src/agent-mode.ts",
     "./config": "./src/config.ts",
-    "./checkpoints": "./src/checkpoints.ts"
+    "./checkpoints": "./src/checkpoints.ts",
+    "./prompt": "./src/prompt.ts",
+    "./prompt-flow": "./src/prompt-flow.ts",
+    "./prompt-runtime": "./src/prompt-runtime.ts",
+    "./auth-flow": "./src/auth-flow.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "bun test"
   },
   "dependencies": {
+    "@clack/prompts": "^1.2.0",
     "commander": "^12.1.0",
+    "picocolors": "^1.1.1",
     "yaml": "^2.6.1",
-    "zod": "^3.24.1",
-    "picocolors": "^1.1.1"
+    "zod": "^3.24.1"
   }
 }

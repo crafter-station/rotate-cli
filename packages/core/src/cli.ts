@@ -1,6 +1,15 @@
 import { Command } from "commander";
 import { assertMaxRotations, enforceAgentMode, isAgentMode } from "./agent-mode.ts";
 import {
+  buildAuthSummary,
+  getAuthDefinition,
+  listAuthDefinitions,
+  listAuthEntries,
+  logoutRegisteredAuth,
+} from "./auth.ts";
+import { runAuthLoginFlow } from "./auth-flow.ts";
+import { createPromptIO } from "./prompt.ts";
+import {
   appendAudit,
   archiveToHistory,
   ensureStateDirs,
@@ -13,6 +22,7 @@ import { emit, makeEnvelope } from "./envelope.ts";
 import { EXIT, RotateError } from "./errors.ts";
 import { applyRotation, revokeRotation } from "./orchestrator.ts";
 import { listAdapters, listConsumers } from "./registry.ts";
+import type { PromptChoice, PromptIO } from "./types.ts";
 
 export async function runCli(argv: string[]): Promise<void> {
   const program = new Command();
@@ -44,6 +54,139 @@ export async function runCli(argv: string[]): Promise<void> {
             "Create `rotate.config.yaml` in your repo",
             "Run `rotate doctor` to verify adapter auth",
           ],
+        }),
+        EXIT.OK,
+      );
+    });
+
+  const authCommand = program.command("auth").description("manage provider auth");
+
+  authCommand
+    .command("list")
+    .description("list auth providers and local auth state")
+    .action(async () => {
+      const started = Date.now();
+      const entries = await listAuthEntries();
+      emit(
+        makeEnvelope({
+          command: "auth:list",
+          status: "success",
+          startedAt: started,
+          agentMode: isAgentMode(),
+          data: { entries },
+          next_actions: entries
+            .filter((entry) => entry.status === "missing")
+            .map((entry) => `Run \`rotate auth login ${entry.name}\` to configure ${entry.displayName}`),
+        }),
+        EXIT.OK,
+      );
+    });
+
+  authCommand
+    .command("login")
+    .argument("[provider]")
+    .description("set up provider auth")
+    .action(async (provider?: string) => {
+      const started = Date.now();
+      const io = createPromptIO();
+      try {
+        if (!io.isInteractive) {
+          throw new RotateError(
+            {
+              code: "unsupported",
+              message: "rotate auth login requires an interactive terminal",
+              provider: "rotate-cli",
+              retryable: false,
+            },
+            EXIT.USER_ERROR,
+          );
+        }
+        const selectedProvider = provider ?? (await promptForAuthProvider(io));
+        const definition = getAuthDefinition(selectedProvider);
+        if (!definition) {
+          throw new RotateError(
+            {
+              code: "invalid_spec",
+              message: `unknown auth provider: ${selectedProvider}`,
+              provider: "rotate-cli",
+              retryable: false,
+            },
+            EXIT.USER_ERROR,
+          );
+        }
+        const ctx = await runAuthLoginFlow(definition, io);
+        const summary = buildAuthSummary(selectedProvider);
+        emit(
+          makeEnvelope({
+            command: "auth:login",
+            status: "success",
+            startedAt: started,
+            agentMode: isAgentMode(),
+            data: {
+              provider: summary.name,
+              display_name: summary.displayName,
+              source: ctx.kind === "env" ? "env" : "stored",
+              env_vars: summary.envVars,
+              setup_url: summary.setupUrl,
+            },
+            next_actions: [
+              `Run \`rotate auth list\` to confirm ${summary.displayName} is configured`,
+              "Run `rotate doctor` to verify registered adapters and consumers",
+            ],
+          }),
+          EXIT.OK,
+        );
+      } finally {
+        await io.close();
+      }
+    });
+
+  authCommand
+    .command("logout")
+    .argument("<provider>")
+    .description("remove rotate-managed provider auth")
+    .action(async (provider: string) => {
+      const started = Date.now();
+      const definition = getAuthDefinition(provider);
+      if (!definition) {
+        emit(
+          makeEnvelope({
+            command: "auth:logout",
+            status: "error",
+            startedAt: started,
+            agentMode: isAgentMode(),
+            errors: [
+              {
+                code: "invalid_spec",
+                message: `unknown auth provider: ${provider}`,
+                provider: "rotate-cli",
+                retryable: false,
+              },
+            ],
+          }),
+          EXIT.USER_ERROR,
+        );
+        return;
+      }
+      const removed = await logoutRegisteredAuth(provider);
+      const envStillConfigured = definition.envVars.some((name) => Boolean(process.env[name]));
+      emit(
+        makeEnvelope({
+          command: "auth:logout",
+          status: "success",
+          startedAt: started,
+          agentMode: isAgentMode(),
+          data: {
+            provider,
+            removed,
+            env_still_configured: envStillConfigured,
+          },
+          next_actions: envStillConfigured
+            ? [
+                `${definition.displayName} still resolves from ${definition.envVars.join(", ")}`,
+                `Unset ${definition.envVars.join(" or ")} if you want auth to be fully unavailable`,
+              ]
+            : [`Run \`rotate auth list\` to confirm ${definition.displayName} is no longer configured`],
         }),
         EXIT.OK,
       );
@@ -463,6 +606,27 @@ export async function runCli(argv: string[]): Promise<void> {
 
 export function exit(code: number): never {
   process.exit(code);
+}
+
+async function promptForAuthProvider(io: PromptIO): Promise<string> {
+  const definitions = listAuthDefinitions();
+  if (!definitions.length) {
+    throw new RotateError(
+      {
+        code: "unsupported",
+        message: "no auth providers are registered",
+        provider: "rotate-cli",
+        retryable: false,
+      },
+      EXIT.USER_ERROR,
+    );
+  }
+  const choices: PromptChoice[] = definitions.map((definition) => ({
+    label: definition.displayName,
+    value: definition.name,
+    hint: definition.notes?.[0],
+  }));
+  return io.select("Select provider", choices);
 }
 
 // Convenience helper for audit-log append from tests.
