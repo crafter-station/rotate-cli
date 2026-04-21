@@ -108,3 +108,87 @@ describe("adapter-github-token.revoke", () => {
     expect(r.ok).toBe(true);
   });
 });
+
+describe("adapter-github-token.ownedBy", () => {
+  test("returns self for a GitHub user token owned by the admin", async () => {
+    mockFetch(
+      () => new Response(JSON.stringify({ login: "admin", id: 42, type: "User" }), { status: 200 }),
+    );
+    const result = await githubTokenAdapter.ownedBy?.("ghp_secret", mockCtx, {
+      preload: { adminUserId: 42, adminLogin: "admin" },
+    });
+    expect(result?.verdict).toBe("self");
+    expect(result?.adminCanBill).toBe(true);
+    expect(result?.scope).toBe("user");
+    expect(result?.confidence).toBe("high");
+    expect(result?.strategy).toBe("api-introspection");
+    expect(calls[0]?.url).toBe("https://api.github.com/user");
+    expect((calls[0]?.init?.headers as Record<string, string>)?.Authorization).toBe(
+      "Bearer ghp_secret",
+    );
+  });
+
+  test("returns other for a GitHub user token owned elsewhere", async () => {
+    mockFetch(
+      () =>
+        new Response(JSON.stringify({ login: "someone-else", id: 99, type: "User" }), {
+          status: 200,
+        }),
+    );
+    const result = await githubTokenAdapter.ownedBy?.("ghu_secret", mockCtx, {
+      preload: { adminUserId: 42, adminLogin: "admin" },
+    });
+    expect(result?.verdict).toBe("other");
+    expect(result?.adminCanBill).toBe(false);
+    expect(result?.scope).toBe("user");
+  });
+
+  test("returns unknown on 401", async () => {
+    mockFetch(() => new Response("unauthorized", { status: 401 }));
+    const result = await githubTokenAdapter.ownedBy?.("ghp_secret", mockCtx, {
+      preload: { adminUserId: 42, adminLogin: "admin" },
+    });
+    expect(result?.verdict).toBe("unknown");
+    expect(result?.adminCanBill).toBe(false);
+    expect(result?.evidence).toContain("invalid or revoked");
+  });
+
+  test("returns unknown on network error", async () => {
+    mockFetch(() => {
+      throw new Error("offline");
+    });
+    const result = await githubTokenAdapter.ownedBy?.("ghp_secret", mockCtx, {
+      preload: { adminUserId: 42, adminLogin: "admin" },
+    });
+    expect(result?.verdict).toBe("unknown");
+    expect(result?.adminCanBill).toBe(false);
+    expect(result?.evidence).toContain("network error");
+  });
+
+  test("matches installation token owner against preloaded admin installations", async () => {
+    mockFetch(
+      () =>
+        new Response(
+          JSON.stringify({
+            total_count: 1,
+            repository_selection: "selected",
+            repositories: [{ owner: { login: "crafter-station", id: 123, type: "Organization" } }],
+          }),
+          { status: 200 },
+        ),
+    );
+    const result = await githubTokenAdapter.ownedBy?.("ghs_secret", mockCtx, {
+      preload: {
+        adminUserId: 42,
+        adminLogin: "admin",
+        adminInstallations: [
+          { account: { login: "crafter-station", id: 123, type: "Organization" } },
+        ],
+      },
+    });
+    expect(result?.verdict).toBe("self");
+    expect(result?.adminCanBill).toBe(false);
+    expect(result?.scope).toBe("org");
+    expect(calls[0]?.url).toBe("https://api.github.com/installation/repositories?per_page=1");
+  });
+});

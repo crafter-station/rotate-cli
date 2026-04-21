@@ -20,6 +20,12 @@ The create endpoint requires a GitHub App JWT as the bearer token. `gh auth toke
 
 GitHub does not provide a general REST API to mint new personal access tokens. This adapter targets GitHub App installation access tokens and documents that PAT rotation is unsupported.
 
+## Ownership detection
+
+`ownedBy()` uses GitHub token prefix decoding plus one read-only API introspection call. User-scoped tokens (`ghp_`, `github_pat_`, `gho_`, and `ghu_`) are checked with `GET /user`. Installation tokens (`ghs_`) are checked with `GET /installation/repositories?per_page=1` and reconciled against any admin installation data supplied in `opts.preload`.
+
+Expected confidence is high when GitHub returns an owner and the caller provides admin identity or installation context. Revoked, expired, refresh-only, rate-limited, or unrecognized tokens return `unknown` instead of throwing. The adapter does not implement `preloadOwnership()` because the documented strategy is O(1) API introspection rather than list matching.
+
 ## Config Example
 
 ```yaml
