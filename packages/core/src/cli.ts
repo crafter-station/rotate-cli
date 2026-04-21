@@ -33,6 +33,7 @@ import {
   shouldRenderPretty as renderShouldPretty,
   renderStatusList,
 } from "./render.ts";
+import { resolveVercelTokenForScan, scanVercel } from "./scan.ts";
 import type { PromptChoice, PromptIO } from "./types.ts";
 
 export async function runCli(argv: string[]): Promise<void> {
@@ -225,6 +226,112 @@ export async function runCli(argv: string[]): Promise<void> {
             : [
                 `Run \`rotate auth list\` to confirm ${definition.displayName} is no longer configured`,
               ],
+        }),
+        EXIT.OK,
+      );
+    });
+
+  program
+    .command("scan")
+    .description(
+      "discover every env var across all your Vercel projects + map to rotate-cli adapters",
+    )
+    .option("--team <slug>", "scan only this team")
+    .option("--include-public", "include NEXT_PUBLIC_* vars (default: skip)")
+    .action(async (opts: { team?: string; includePublic?: boolean }) => {
+      const started = Date.now();
+      const token = resolveVercelTokenForScan();
+      if (!token) {
+        emit(
+          makeEnvelope({
+            command: "scan",
+            status: "error",
+            startedAt: started,
+            agentMode: isAgentMode(),
+            errors: [
+              {
+                code: "auth_failed",
+                message:
+                  "VERCEL_TOKEN missing. Create one at https://vercel.com/account/tokens (scope: All teams) and add to .env.local",
+                provider: "rotate-cli",
+                retryable: false,
+              },
+            ],
+          }),
+          EXIT.USER_ERROR,
+        );
+        return;
+      }
+      let result: Awaited<ReturnType<typeof scanVercel>>;
+      try {
+        result = await scanVercel({
+          token,
+          teamSlug: opts.team,
+          includePublic: opts.includePublic,
+        });
+      } catch (cause) {
+        emit(
+          makeEnvelope({
+            command: "scan",
+            status: "error",
+            startedAt: started,
+            agentMode: isAgentMode(),
+            errors: [
+              {
+                code: "provider_error",
+                message: String(cause),
+                provider: "vercel",
+                retryable: true,
+              },
+            ],
+          }),
+          EXIT.PROVIDER_ERROR,
+        );
+        return;
+      }
+      const byAdapter: Record<string, number> = {};
+      for (const s of result.secrets) {
+        byAdapter[s.adapter] = (byAdapter[s.adapter] ?? 0) + 1;
+      }
+      if (shouldRenderPretty(program)) {
+        process.stdout.write("rotate-cli scan\n\n");
+        process.stdout.write(
+          `Scanned ${result.projectsScanned} project(s) across ${result.teamsScanned.length} team(s)\n\n`,
+        );
+        process.stdout.write(`Mapped secrets: ${result.secrets.length}\n`);
+        const sortedAdapters = Object.entries(byAdapter).sort((a, b) => b[1] - a[1]);
+        for (const [adapter, count] of sortedAdapters) {
+          process.stdout.write(`  ${String(count).padStart(4)}  ${adapter}\n`);
+        }
+        process.stdout.write(`\nSkipped (no mapping): ${result.skipped.length}\n`);
+        process.stdout.write("\nNext:\n");
+        process.stdout.write(
+          "  → rotate-cli who --from-scan            # ownership check every mapped secret\n",
+        );
+        process.stdout.write(
+          `  → rotate-cli apply --from-scan --tag non-sensitive --yes --reason "..."\n`,
+        );
+        process.exit(EXIT.OK);
+      }
+      emit(
+        makeEnvelope({
+          command: "scan",
+          status: "success",
+          startedAt: started,
+          agentMode: isAgentMode(),
+          data: {
+            teams_scanned: result.teamsScanned,
+            projects_scanned: result.projectsScanned,
+            total_secrets: result.secrets.length,
+            total_skipped: result.skipped.length,
+            by_adapter: byAdapter,
+            secrets: result.secrets,
+            skipped: result.skipped,
+          },
+          next_actions: [
+            "rotate-cli who --from-scan  # ownership check every mapped secret",
+            'rotate-cli apply --from-scan --tag non-sensitive --yes --reason "..."',
+          ],
         }),
         EXIT.OK,
       );
