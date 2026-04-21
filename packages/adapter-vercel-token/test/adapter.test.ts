@@ -117,3 +117,120 @@ describe("adapter-vercel-token.revoke", () => {
     expect(r.ok).toBe(true);
   });
 });
+
+describe("adapter-vercel-token.ownedBy", () => {
+  test("returns self for a team-scoped token owned by an admin team", async () => {
+    const ctx: AuthContext = { kind: "env", varName: "VERCEL_TOKEN", token: "admin_self_team" };
+    mockFetch((url, init) => {
+      const auth = (init?.headers as Record<string, string>)?.Authorization;
+      if (url.endsWith("/v5/user/tokens/current")) {
+        return new Response(
+          JSON.stringify({
+            token: { scopes: [{ type: "team", teamId: "team_admin" }] },
+          }),
+          { status: 200 },
+        );
+      }
+      if (url.endsWith("/v2/user") && auth === "Bearer admin_self_team") {
+        return new Response(JSON.stringify({ user: { id: "user_admin" } }), { status: 200 });
+      }
+      if (url.endsWith("/v2/teams")) {
+        return new Response(
+          JSON.stringify({
+            teams: [{ id: "team_admin", membership: { role: "OWNER" } }],
+          }),
+          { status: 200 },
+        );
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    const result = await vercelTokenAdapter.ownedBy?.("secret_team_token", ctx);
+
+    expect(result).toEqual({
+      verdict: "self",
+      adminCanBill: true,
+      scope: "team",
+      teamRole: "admin",
+      confidence: "high",
+      evidence: "team-scoped token; admin is a billing-capable team member",
+      strategy: "api-introspection",
+    });
+    expect((calls[0]?.init?.headers as Record<string, string>)?.Authorization).toBe(
+      "Bearer secret_team_token",
+    );
+  });
+
+  test("returns other for a team-scoped token outside admin teams", async () => {
+    const ctx: AuthContext = { kind: "env", varName: "VERCEL_TOKEN", token: "admin_other_team" };
+    mockFetch((url, init) => {
+      const auth = (init?.headers as Record<string, string>)?.Authorization;
+      if (url.endsWith("/v5/user/tokens/current")) {
+        return new Response(
+          JSON.stringify({
+            token: { scopes: [{ type: "team", teamId: "team_external" }] },
+          }),
+          { status: 200 },
+        );
+      }
+      if (url.endsWith("/v2/user") && auth === "Bearer admin_other_team") {
+        return new Response(JSON.stringify({ user: { id: "user_admin" } }), { status: 200 });
+      }
+      if (url.endsWith("/v2/teams")) {
+        return new Response(JSON.stringify({ teams: [] }), { status: 200 });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    const result = await vercelTokenAdapter.ownedBy?.("secret_external_team_token", ctx);
+
+    expect(result).toEqual({
+      verdict: "other",
+      adminCanBill: false,
+      scope: "team",
+      confidence: "high",
+      evidence: "team-scoped token; admin is not a member of the token team",
+      strategy: "api-introspection",
+    });
+  });
+
+  test("returns unknown on 401", async () => {
+    const ctx: AuthContext = { kind: "env", varName: "VERCEL_TOKEN", token: "admin_unknown_401" };
+    mockFetch(() => new Response("unauthorized", { status: 401 }));
+
+    const result = await vercelTokenAdapter.ownedBy?.("revoked_token", ctx);
+
+    expect(result).toEqual({
+      verdict: "unknown",
+      adminCanBill: false,
+      confidence: "low",
+      evidence: "token is inactive, revoked, or cannot be introspected",
+      strategy: "api-introspection",
+    });
+    expect(calls).toHaveLength(1);
+  });
+
+  test("returns unknown on network error", async () => {
+    const ctx: AuthContext = {
+      kind: "env",
+      varName: "VERCEL_TOKEN",
+      token: "admin_unknown_network",
+    };
+    global.fetch = ((url: RequestInfo | URL, init?: RequestInit) => {
+      const u = typeof url === "string" ? url : url.toString();
+      calls.push({ url: u, init });
+      throw new Error("offline");
+    }) as FetchFn;
+
+    const result = await vercelTokenAdapter.ownedBy?.("network_token", ctx);
+
+    expect(result).toEqual({
+      verdict: "unknown",
+      adminCanBill: false,
+      confidence: "low",
+      evidence: "network error during ownership check",
+      strategy: "api-introspection",
+    });
+    expect(calls).toHaveLength(1);
+  });
+});

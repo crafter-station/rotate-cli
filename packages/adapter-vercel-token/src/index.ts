@@ -5,6 +5,7 @@ import { makeError } from "@rotate/core";
 import type {
   Adapter,
   AuthContext,
+  OwnershipResult,
   RotationResult,
   RotationSpec,
   Secret,
@@ -26,6 +27,35 @@ interface VercelCreateTokenResponse {
   token: VercelToken;
   bearerToken: string;
 }
+
+interface VercelCurrentTokenResponse {
+  token?: {
+    scopes?: Array<{ type?: string; teamId?: string }>;
+  };
+}
+
+interface VercelUserResponse {
+  user?: {
+    id?: string;
+  };
+}
+
+interface VercelTeam {
+  id?: string;
+  membership?: {
+    role?: string;
+  };
+}
+
+interface VercelTeamsResponse {
+  teams?: VercelTeam[];
+  pagination?: {
+    next?: number | null;
+  };
+}
+
+const adminUserIdCache = new Map<string, Promise<string | undefined>>();
+const adminTeamsCache = new Map<string, Promise<Map<string, VercelTeam> | undefined>>();
 
 export const vercelTokenAdapter: Adapter = {
   name: "vercel-token",
@@ -142,6 +172,35 @@ export const vercelTokenAdapter: Adapter = {
       })),
     };
   },
+
+  async ownedBy(secretValue: string, ctx: AuthContext): Promise<OwnershipResult> {
+    try {
+      const res = await fetch(`${VERCEL_BASE}/v5/user/tokens/current`, {
+        headers: { Authorization: `Bearer ${secretValue}` },
+      });
+
+      if (!res.ok) return ownershipFromFailedResponse(res);
+
+      const body = (await res.json()) as VercelCurrentTokenResponse;
+      const scopes = body.token?.scopes ?? [];
+      const teamScope = scopes.find((scope) => scope.type === "team" && scope.teamId);
+      if (teamScope?.teamId) {
+        return await teamOwnership(teamScope.teamId, ctx);
+      }
+
+      const userScope = scopes.find((scope) => scope.type === "user");
+      if (userScope) {
+        return await userOwnership(secretValue, ctx);
+      }
+
+      return unknownOwnership("token introspection returned no user or team scope");
+    } catch (cause) {
+      makeError("network_error", "vercel-token ownedBy: network error", "vercel-token", {
+        cause,
+      });
+      return unknownOwnership("network error during ownership check");
+    }
+  },
 };
 
 export default vercelTokenAdapter;
@@ -151,6 +210,144 @@ function authHeaders(ctx: AuthContext): Record<string, string> {
     Authorization: `Bearer ${ctx.token}`,
     "Content-Type": "application/json",
   };
+}
+
+async function teamOwnership(teamId: string, ctx: AuthContext): Promise<OwnershipResult> {
+  const teams = await loadAdminTeams(ctx);
+  if (!teams) {
+    return unknownOwnership("admin team membership lookup failed");
+  }
+
+  const team = teams.get(teamId);
+  if (!team) {
+    return {
+      verdict: "other",
+      adminCanBill: false,
+      scope: "team",
+      confidence: "high",
+      evidence: "team-scoped token; admin is not a member of the token team",
+      strategy: "api-introspection",
+    };
+  }
+
+  const role = team.membership?.role;
+  return {
+    verdict: "self",
+    adminCanBill: canBill(role),
+    scope: "team",
+    teamRole: normalizeTeamRole(role),
+    confidence: "high",
+    evidence: canBill(role)
+      ? "team-scoped token; admin is a billing-capable team member"
+      : "team-scoped token; admin is a team member without billing control",
+    strategy: "api-introspection",
+  };
+}
+
+async function userOwnership(secretValue: string, ctx: AuthContext): Promise<OwnershipResult> {
+  const [adminUserId, tokenUserId] = await Promise.all([
+    loadAdminUserId(ctx),
+    fetchUserId(secretValue),
+  ]);
+  if (!adminUserId || !tokenUserId) {
+    return unknownOwnership("user-scoped token, but user identity lookup failed");
+  }
+
+  const self = adminUserId === tokenUserId;
+  return {
+    verdict: self ? "self" : "other",
+    adminCanBill: self,
+    scope: "user",
+    confidence: "high",
+    evidence: self
+      ? "user-scoped token matches admin user"
+      : "user-scoped token belongs to another user",
+    strategy: "api-introspection",
+  };
+}
+
+async function loadAdminUserId(ctx: AuthContext): Promise<string | undefined> {
+  const cacheKey = `${VERCEL_BASE}:${ctx.token}`;
+  let cached = adminUserIdCache.get(cacheKey);
+  if (!cached) {
+    cached = fetchUserId(ctx.token);
+    adminUserIdCache.set(cacheKey, cached);
+  }
+  return cached;
+}
+
+async function loadAdminTeams(ctx: AuthContext): Promise<Map<string, VercelTeam> | undefined> {
+  const cacheKey = `${VERCEL_BASE}:${ctx.token}`;
+  let cached = adminTeamsCache.get(cacheKey);
+  if (!cached) {
+    cached = fetchTeams(ctx);
+    adminTeamsCache.set(cacheKey, cached);
+  }
+  return cached;
+}
+
+async function fetchUserId(token: string): Promise<string | undefined> {
+  const res = await fetch(`${VERCEL_BASE}/v2/user`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) return undefined;
+  const body = (await res.json()) as VercelUserResponse;
+  return body.user?.id;
+}
+
+async function fetchTeams(ctx: AuthContext): Promise<Map<string, VercelTeam> | undefined> {
+  const teams = new Map<string, VercelTeam>();
+  let next: number | null | undefined;
+
+  do {
+    const url = new URL(`${VERCEL_BASE}/v2/teams`);
+    if (next !== undefined && next !== null) url.searchParams.set("until", String(next));
+
+    const res = await fetch(url, { headers: authHeaders(ctx) });
+    if (!res.ok) return undefined;
+
+    const body = (await res.json()) as VercelTeamsResponse;
+    for (const team of body.teams ?? []) {
+      if (team.id) teams.set(team.id, team);
+    }
+    next = body.pagination?.next;
+  } while (next !== undefined && next !== null);
+
+  return teams;
+}
+
+function ownershipFromFailedResponse(res: Response): OwnershipResult {
+  const error = fromResponse(res, "ownedBy");
+  if (error.code === "auth_failed") {
+    return unknownOwnership("token is inactive, revoked, or cannot be introspected");
+  }
+  if (error.code === "rate_limited") {
+    return unknownOwnership("rate limited while introspecting token");
+  }
+  if (error.code === "provider_error" && res.status >= 500) {
+    return unknownOwnership("provider unavailable");
+  }
+  return unknownOwnership(`token introspection returned ${res.status}`);
+}
+
+function unknownOwnership(evidence: string): OwnershipResult {
+  return {
+    verdict: "unknown",
+    adminCanBill: false,
+    confidence: "low",
+    evidence,
+    strategy: "api-introspection",
+  };
+}
+
+function canBill(role: string | undefined): boolean {
+  return role === "OWNER" || role === "BILLING";
+}
+
+function normalizeTeamRole(role: string | undefined): "admin" | "member" | "viewer" {
+  if (role === "OWNER" || role === "BILLING") return "admin";
+  if (role === "VIEWER") return "viewer";
+  return "member";
 }
 
 function candidateAuthPaths(): string[] {
