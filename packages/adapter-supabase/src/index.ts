@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { makeError } from "@rotate/core";
+import { makeError, resolveRegisteredAuth } from "@rotate/core";
 import type {
   Adapter,
   AuthContext,
@@ -9,6 +9,7 @@ import type {
   RotationSpec,
   Secret,
 } from "@rotate/core/types";
+import { supabaseAuthDefinition } from "./auth.ts";
 
 const SUPABASE_API_BASE = process.env.SUPABASE_API_URL ?? "https://api.supabase.com";
 const SUPABASE_PROJECT_BASE =
@@ -32,13 +33,11 @@ interface SupabaseProject {
 
 export const supabaseAdapter: Adapter = {
   name: "supabase",
+  authRef: "supabase",
+  authDefinition: supabaseAuthDefinition,
 
   async auth(): Promise<AuthContext> {
-    const envToken = process.env.SUPABASE_ACCESS_TOKEN;
-    if (envToken) {
-      return { kind: "env", varName: "SUPABASE_ACCESS_TOKEN", token: envToken };
-    }
-    throw new Error("supabase auth unavailable: set SUPABASE_ACCESS_TOKEN");
+    return resolveRegisteredAuth("supabase");
   },
 
   async create(spec: RotationSpec, ctx: AuthContext): Promise<RotationResult<Secret>> {

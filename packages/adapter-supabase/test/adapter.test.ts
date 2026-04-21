@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { getAuthDefinition } from "@rotate/core";
+import { registerAdapter, resetRegistry } from "@rotate/core/registry";
 import type { AuthContext, Secret } from "@rotate/core/types";
 import { supabaseAdapter } from "../src/index.ts";
 
@@ -17,10 +19,15 @@ function mockFetch(responder: (url: string, init?: RequestInit) => Response | Pr
 
 beforeEach(() => {
   calls = [];
+  resetRegistry();
+  registerAdapter(supabaseAdapter);
+  delete process.env.SUPABASE_ACCESS_TOKEN;
 });
 
 afterEach(() => {
   global.fetch = originalFetch;
+  resetRegistry();
+  delete process.env.SUPABASE_ACCESS_TOKEN;
 });
 
 const mockCtx: AuthContext = {
@@ -105,6 +112,19 @@ describe("adapter-supabase.revoke", () => {
     };
     const r = await supabaseAdapter.revoke(secret, mockCtx);
     expect(r.ok).toBe(true);
+  });
+});
+
+describe("adapter-supabase.auth", () => {
+  test("resolves env auth through shared auth registry", async () => {
+    process.env.SUPABASE_ACCESS_TOKEN = "test-token";
+    const ctx = await supabaseAdapter.auth();
+    expect(ctx.kind).toBe("env");
+    expect(ctx.token).toBe("test-token");
+  });
+
+  test("registers auth definition with the adapter", () => {
+    expect(getAuthDefinition("supabase")?.displayName).toBe("Supabase");
   });
 });
 
