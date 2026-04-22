@@ -1,6 +1,41 @@
 ---
 import Base from "../layouts/Base.astro";
 import KingMark from "../components/KingMark.astro";
+import { ClerkLogo } from "../components/logos/clerk";
+import { OpenAILogo } from "../components/logos/openai";
+import { AnthropicLogo } from "../components/logos/anthropic";
+import { ResendLogo } from "../components/logos/resend";
+import { SupabaseLogo } from "../components/logos/supabase";
+import { NeonLogo } from "../components/logos/neon";
+import { VercelLogo } from "../components/logos/vercel";
+import { GithubLogo } from "../components/logos/github";
+import { UpstashLogo } from "../components/logos/upstash";
+import { PolarLogo } from "../components/logos/polar";
+import { TursoLogo } from "../components/logos/turso";
+import { ElevenlabsLogo } from "../components/logos/elevenlabs";
+import { FalLogo } from "../components/logos/fal";
+
+// biome-ignore lint/suspicious/noExplicitAny: logos are all SVG React components with compatible props
+const logoByName: Record<string, any> = {
+  clerk: ClerkLogo,
+  openai: OpenAILogo,
+  anthropic: AnthropicLogo,
+  resend: ResendLogo,
+  supabase: SupabaseLogo,
+  neon: NeonLogo,
+  "neon-connection": NeonLogo,
+  github: GithubLogo,
+  "github-token": GithubLogo,
+  vercel: VercelLogo,
+  "vercel-token": VercelLogo,
+  "ai-gateway": VercelLogo,
+  "vercel-kv": VercelLogo,
+  upstash: UpstashLogo,
+  polar: PolarLogo,
+  turso: TursoLogo,
+  elevenlabs: ElevenlabsLogo,
+  fal: FalLogo,
+};
 
 const adapters = [
   { name: "clerk", covers: "CLERK_SECRET_KEY, webhook", tag: "auth" },
@@ -66,6 +101,9 @@ const rotations = [
             <path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.87 10.91.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.36-3.88-1.36-.53-1.33-1.29-1.68-1.29-1.68-1.05-.72.08-.71.08-.71 1.17.08 1.78 1.2 1.78 1.2 1.04 1.77 2.72 1.26 3.38.96.1-.75.4-1.26.73-1.55-2.55-.29-5.23-1.28-5.23-5.7 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11.05 11.05 0 0 1 5.78 0c2.21-1.49 3.18-1.18 3.18-1.18.63 1.59.23 2.76.11 3.05.74.8 1.19 1.83 1.19 3.09 0 4.43-2.69 5.4-5.25 5.69.41.35.77 1.03.77 2.09v3.1c0 .31.21.66.8.55 4.57-1.53 7.86-5.83 7.86-10.91C23.5 5.65 18.35.5 12 .5z"/>
           </svg>
           View on GitHub
+        </a>
+        <a href="/docs" class="text-ink hover:text-bronze no-underline px-3">
+          Docs →
         </a>
         <a href="#quickstart" class="text-ink hover:text-bronze no-underline px-3">
           Quick start →
@@ -159,15 +197,23 @@ const rotations = [
       <div class="mt-12 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
         {adapters.map((a, i) => {
           const r = rotations[i % rotations.length]!;
+          const Logo = logoByName[a.name];
           return (
             <article
               class="card p-5 transition-transform duration-500"
               style={`transform: rotate(${r.offset}) translate(${r.translate});`}
             >
-              <div class="flex items-baseline justify-between">
-                <h3 class="font-display text-xl text-ink">{a.name}</h3>
+              <div class="flex items-center justify-between mb-3">
+                {Logo ? (
+                  <div class="h-7 w-7 flex items-center justify-center">
+                    <Logo className="h-full w-auto text-ink" />
+                  </div>
+                ) : (
+                  <div class="h-7 w-7" />
+                )}
                 <span class="label text-[10px] text-bronze">{a.tag}</span>
               </div>
+              <h3 class="font-display text-xl text-ink">{a.name}</h3>
               <p class="mt-2 text-sm text-graphite">{a.covers}</p>
             </article>
           );

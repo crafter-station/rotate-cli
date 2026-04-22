@@ -101,6 +101,13 @@
         "@rotate/core": "workspace:*",
       },
     },
+    "packages/adapter-trigger-dev": {
+      "name": "@rotate/adapter-trigger-dev",
+      "version": "0.0.1",
+      "dependencies": {
+        "@rotate/core": "workspace:*",
+      },
+    },
     "packages/adapter-turso": {
       "name": "@rotate/adapter-turso",
       "version": "0.0.1",
@@ -250,6 +257,8 @@
     "@rotate/adapter-resend": ["@rotate/adapter-resend@workspace:packages/adapter-resend"],
 
     "@rotate/adapter-supabase": ["@rotate/adapter-supabase@workspace:packages/adapter-supabase"],
+
+    "@rotate/adapter-trigger-dev": ["@rotate/adapter-trigger-dev@workspace:packages/adapter-trigger-dev"],
 
     "@rotate/adapter-turso": ["@rotate/adapter-turso@workspace:packages/adapter-turso"],
 

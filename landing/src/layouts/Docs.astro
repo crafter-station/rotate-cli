@@ -1,0 +1,219 @@
+---
+import "../styles/global.css";
+import Analytics from "@vercel/analytics/astro";
+
+interface Props {
+  title: string;
+  description?: string;
+  section?: string;
+}
+
+const { title, description, section } = Astro.props;
+const fullTitle = `${title} · rotate-cli docs`;
+
+const nav = [
+  {
+    heading: "Start here",
+    items: [
+      { href: "/docs", label: "Intro" },
+      { href: "/docs/quickstart", label: "Quickstart" },
+    ],
+  },
+  {
+    heading: "Commands",
+    items: [
+      { href: "/docs/scan", label: "scan" },
+      { href: "/docs/who", label: "who" },
+      { href: "/docs/apply", label: "apply" },
+      { href: "/docs/status", label: "status & revoke" },
+    ],
+  },
+  {
+    heading: "Reference",
+    items: [
+      { href: "/docs/adapters", label: "Adapters" },
+      { href: "/docs/agent-mode", label: "Agent mode" },
+      { href: "/docs/incident", label: "Incident mode" },
+    ],
+  },
+];
+
+const currentPath = Astro.url.pathname.replace(/\/$/, "") || "/docs";
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content={description ?? "rotate-cli documentation"} />
+    <meta property="og:title" content={fullTitle} />
+    <meta property="og:description" content={description ?? "rotate-cli documentation"} />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content={`https://rotate-cli.crafter.run${Astro.url.pathname}`} />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="generator" content={Astro.generator} />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>{fullTitle}</title>
+  </head>
+  <body class="min-h-screen">
+    <header class="border-b border-ink/10 bg-parchment-surface/60 backdrop-blur-sm sticky top-0 z-10">
+      <div class="mx-auto max-w-6xl px-6 py-4 flex items-center justify-between">
+        <a href="/" class="no-underline flex items-baseline gap-3">
+          <span class="font-display text-xl font-semibold text-ink">rotate-cli</span>
+          <span class="label text-xs">docs</span>
+        </a>
+        <nav class="flex items-center gap-6 text-sm">
+          <a href="/" class="no-underline text-graphite hover:text-bronze">Home</a>
+          <a
+            href="https://github.com/crafter-station/rotate-cli"
+            class="no-underline text-graphite hover:text-bronze inline-flex items-center gap-1.5"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.87 10.91.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.36-3.88-1.36-.53-1.33-1.29-1.68-1.29-1.68-1.05-.72.08-.71.08-.71 1.17.08 1.78 1.2 1.78 1.2 1.04 1.77 2.72 1.26 3.38.96.1-.75.4-1.26.73-1.55-2.55-.29-5.23-1.28-5.23-5.7 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11.05 11.05 0 0 1 5.78 0c2.21-1.49 3.18-1.18 3.18-1.18.63 1.59.23 2.76.11 3.05.74.8 1.19 1.83 1.19 3.09 0 4.43-2.69 5.4-5.25 5.69.41.35.77 1.03.77 2.09v3.1c0 .31.21.66.8.55 4.57-1.53 7.86-5.83 7.86-10.91C23.5 5.65 18.35.5 12 .5z"/>
+            </svg>
+            GitHub
+          </a>
+        </nav>
+      </div>
+    </header>
+
+    <div class="mx-auto max-w-6xl px-6 py-10 lg:grid lg:grid-cols-[220px_minmax(0,1fr)] lg:gap-12">
+      <aside class="hidden lg:block sticky top-24 self-start">
+        <nav class="space-y-6">
+          {
+            nav.map((group) => (
+              <div>
+                <p class="label text-xs mb-2">{group.heading}</p>
+                <ul class="space-y-1.5">
+                  {group.items.map((item) => {
+                    const active = currentPath === item.href;
+                    return (
+                      <li>
+                        <a
+                          href={item.href}
+                          class:list={[
+                            "block text-sm no-underline rounded-[2px] px-2 py-1 -ml-2",
+                            active
+                              ? "text-ink font-medium bg-ink/5"
+                              : "text-graphite hover:text-bronze",
+                          ]}
+                        >
+                          {item.label}
+                        </a>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            ))
+          }
+        </nav>
+      </aside>
+
+      <main class="min-w-0 prose-docs">
+        {section && <p class="label text-xs mb-3">{section}</p>}
+        <slot />
+
+        <footer class="mt-20 pt-8 border-t border-ink/10 text-sm text-graphite-mid flex justify-between">
+          <a href="https://github.com/crafter-station/rotate-cli" class="no-underline">
+            Edit on GitHub →
+          </a>
+          <span>Crafter Station · 2026</span>
+        </footer>
+      </main>
+    </div>
+
+    <Analytics />
+
+    <style is:global>
+      .prose-docs h1 {
+        font-size: clamp(2.25rem, 5vw, 3rem);
+        margin-bottom: 1rem;
+      }
+      .prose-docs h2 {
+        font-size: clamp(1.5rem, 3vw, 2rem);
+        margin-top: 3rem;
+        margin-bottom: 1rem;
+        padding-top: 1rem;
+        border-top: 1px solid color-mix(in oklab, var(--color-ink) 8%, transparent);
+      }
+      .prose-docs h3 {
+        font-size: 1.25rem;
+        margin-top: 2rem;
+        margin-bottom: 0.75rem;
+      }
+      .prose-docs p {
+        margin: 0 0 1rem;
+        max-width: 68ch;
+      }
+      .prose-docs ul,
+      .prose-docs ol {
+        margin: 0 0 1rem;
+        padding-left: 1.5rem;
+      }
+      .prose-docs ul li,
+      .prose-docs ol li {
+        margin-bottom: 0.4rem;
+      }
+      .prose-docs p code,
+      .prose-docs li code,
+      .prose-docs h2 code,
+      .prose-docs h3 code,
+      .prose-docs td code {
+        background: color-mix(in oklab, var(--color-ink) 6%, transparent);
+        padding: 0.08em 0.35em;
+        border-radius: 2px;
+        font-size: 0.88em;
+      }
+      .prose-docs pre {
+        margin: 1rem 0 1.5rem;
+      }
+      .prose-docs table {
+        width: 100%;
+        border-collapse: collapse;
+        margin: 1rem 0 1.5rem;
+        font-size: 0.94rem;
+      }
+      .prose-docs th,
+      .prose-docs td {
+        padding: 0.5rem 0.75rem;
+        border-bottom: 1px solid color-mix(in oklab, var(--color-ink) 10%, transparent);
+        text-align: left;
+      }
+      .prose-docs th {
+        font-variant-caps: all-small-caps;
+        letter-spacing: 0.06em;
+        font-weight: 500;
+        color: var(--color-graphite-mid);
+        border-bottom-color: color-mix(in oklab, var(--color-ink) 20%, transparent);
+      }
+      .prose-docs blockquote {
+        border-left: 3px solid var(--color-bronze);
+        padding: 0.4rem 1rem;
+        margin: 1rem 0;
+        font-style: italic;
+        color: var(--color-graphite);
+        background: color-mix(in oklab, var(--color-bronze) 4%, transparent);
+      }
+      .prose-docs hr {
+        border: 0;
+        border-top: 1px solid color-mix(in oklab, var(--color-ink) 12%, transparent);
+        margin: 2.5rem 0;
+      }
+      .prose-docs .callout {
+        margin: 1.25rem 0;
+        padding: 1rem 1.25rem;
+        border-left: 3px solid var(--color-bronze);
+        background: color-mix(in oklab, var(--color-bronze) 6%, transparent);
+        border-radius: 2px;
+      }
+      .prose-docs .callout p:last-child {
+        margin-bottom: 0;
+      }
+      .prose-docs .callout strong {
+        color: var(--color-sepia);
+      }
+    </style>
+  </body>
+</html>

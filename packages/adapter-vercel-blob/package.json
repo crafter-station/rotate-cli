@@ -1,0 +1,16 @@
+{
+  "name": "@rotate/adapter-vercel-blob",
+  "version": "0.0.1",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./auth": "./src/auth.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@rotate/core": "workspace:*"
+  }
+}

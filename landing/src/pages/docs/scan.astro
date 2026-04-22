@@ -1,0 +1,105 @@
+---
+import Docs from "../../layouts/Docs.astro";
+import Terminal from "../../components/Terminal.astro";
+---
+
+<Docs
+  title="scan"
+  section="Commands"
+  description="Discover every env var across every Vercel project and map them to rotate-cli adapters."
+>
+  <h1><code>scan</code></h1>
+  <p class="text-lg text-graphite">
+    Enumerate every env var across every Vercel project your token can
+    see, and map each to a rotate-cli adapter.
+  </p>
+
+  <h2>What it does</h2>
+  <p>
+    Scan hits <code>/api/dashboard/environment-variables</code> to get
+    every env var name across every project (up to ~2000 projects per
+    team) without pagination, then falls back to <code>/v9/projects</code>
+    if the dashboard endpoint is truncated. Each variable name is matched
+    against a built-in map to decide which adapter owns it.
+  </p>
+
+  <h2>Usage</h2>
+  <Terminal>
+<span class="prompt">$</span> rotate-cli scan [--team &lt;slug&gt;] [--include-public]
+  </Terminal>
+
+  <h3>Flags</h3>
+  <table>
+    <thead>
+      <tr>
+        <th>Flag</th>
+        <th>Meaning</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>--team &lt;slug&gt;</code></td>
+        <td>Scan only one Vercel team (default: every team your token can see).</td>
+      </tr>
+      <tr>
+        <td><code>--include-public</code></td>
+        <td>Include <code>NEXT_PUBLIC_*</code> vars (default: skip — public by design).</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>Output</h2>
+  <p>Cached at <code>~/.config/rotate-cli/last-scan.json</code>. Readable by <code>who --from-scan</code> and <code>apply --from-scan</code> without re-hitting Vercel.</p>
+
+  <h3>Pretty</h3>
+  <Terminal>
+<span class="cmt">Scanning 1 scope(s)...
+  ✓ crafter-station    318 projects · 462 secrets · 5.1s
+
+Total: 318 projects · 462 mapped · 366 unmapped
+
+Mapped by adapter:
+    99  clerk
+   148  neon-connection
+    80  upstash
+    29  vercel-ai-gateway
+    24  openai
+    ...
+
+Next:
+  → rotate-cli who --from-scan</span>
+  </Terminal>
+
+  <h3>JSON (agent mode)</h3>
+  <Terminal>
+<span class="prompt">$</span> ROTATE_CLI_AGENT_MODE=1 rotate-cli scan
+<span class="kw">&#123;</span>
+  <span class="str">"command"</span>: <span class="str">"scan"</span>,
+  <span class="str">"status"</span>: <span class="str">"success"</span>,
+  <span class="str">"data"</span>: &#123;
+    <span class="str">"projects_scanned"</span>: 318,
+    <span class="str">"total_secrets"</span>: 462,
+    <span class="str">"by_adapter"</span>: &#123;<span class="str">"clerk"</span>: 99, ... &#125;,
+    <span class="str">"secrets"</span>: [ ... ],
+    <span class="str">"skipped"</span>: [&#123; <span class="str">"var_name"</span>: <span class="str">"NODE_ENV"</span>, ... &#125;]
+  &#125;
+<span class="kw">&#125;</span>
+  </Terminal>
+
+  <h2>Authentication</h2>
+  <p>
+    Scan reuses the Vercel CLI&apos;s auth token from <code>~/Library/Application Support/com.vercel.cli/auth.json</code>.
+    Override with <code>VERCEL_TOKEN</code> in <code>.env.local</code>. The token
+    needs <code>All teams</code> scope for a full sweep.
+  </p>
+
+  <div class="callout">
+    <p>
+      <strong>Hunter&apos;s vault, real numbers.</strong> 318 projects · 462
+      mapped · 366 unmapped. Of the unmapped, ~50 are config/IDs
+      (<code>NODE_ENV</code>, project refs), ~80 are providers not yet
+      supported by an adapter (see <a href="/docs/adapters">adapters</a>),
+      the rest are one-off app vars.
+    </p>
+  </div>
+</Docs>

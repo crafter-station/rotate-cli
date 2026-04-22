@@ -1,0 +1,76 @@
+---
+import Docs from "../../layouts/Docs.astro";
+import Terminal from "../../components/Terminal.astro";
+---
+
+<Docs
+  title="Incident mode"
+  section="Reference"
+  description="Rotate everything in scope for a vendor incident in one command."
+>
+  <h1>Incident mode</h1>
+  <p class="text-lg text-graphite">
+    Pre-declared scopes for vendor breaches. Rotate everything flagged
+    in one command instead of assembling ad-hoc selectors.
+  </p>
+
+  <h2>The shape of an incident file</h2>
+  <p>
+    An incident lives at <code>.rotate/incidents/&lt;slug&gt;.yaml</code> in
+    your repo. It declares a scope: which providers, optionally filtered
+    by tag or metadata.
+  </p>
+
+  <Terminal>
+<span class="cmt"># .rotate/incidents/vercel-apr-2026.yaml</span>
+<span class="str">version</span>: 1
+<span class="str">id</span>: vercel-apr-2026
+<span class="str">published</span>: <span class="str">"2026-04-18"</span>
+<span class="str">reference</span>: <span class="str">"https://vercel.com/blog/apr-2026-oauth-incident"</span>
+<span class="str">severity</span>: high
+<span class="str">scope</span>:
+  - <span class="str">provider</span>: clerk
+    <span class="str">filter</span>: &#123; <span class="str">tag</span>: non-sensitive &#125;
+  - <span class="str">provider</span>: resend
+  - <span class="str">provider</span>: openai
+    <span class="str">filter</span>: &#123; <span class="str">tag</span>: non-sensitive &#125;
+  - <span class="str">provider</span>: anthropic
+  - <span class="str">provider</span>: supabase
+  ...
+  </Terminal>
+
+  <h2>Running an incident</h2>
+  <Terminal>
+<span class="prompt">$</span> rotate-cli incident .rotate/incidents/vercel-apr-2026.yaml \
+    <span class="kw">--yes \
+    --reason</span> <span class="str">"context.ai OAuth incident"</span> \
+    <span class="kw">--max-rotations</span> 100
+  </Terminal>
+
+  <h3>Dry run</h3>
+  <p>See the plan without rotating anything:</p>
+  <Terminal>
+<span class="prompt">$</span> rotate-cli incident &lt;file&gt; --dry-run
+  </Terminal>
+
+  <h2>Flags</h2>
+  <table>
+    <thead><tr><th>Flag</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td><code>--dry-run</code></td><td>Print the plan, don&apos;t rotate.</td></tr>
+      <tr><td><code>--max-rotations &lt;n&gt;</code></td><td>Hard cap, required in agent mode.</td></tr>
+      <tr><td><code>--skip-unknown</code></td><td>Skip secrets where ownership can&apos;t be determined.</td></tr>
+      <tr><td><code>--force-rotate-other</code></td><td>Rotate even if ownership says "other" (dangerous).</td></tr>
+      <tr><td><code>--no-ownership-check</code></td><td>Disable the gate entirely.</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout">
+    <p>
+      <strong>Why declarative?</strong> When a vendor breach happens,
+      you don&apos;t want to improvise the selector. The incident file is
+      checked into the repo, reviewed in a PR, and runs unchanged in
+      both dry-run and real mode. Post-mortem has a single artifact.
+    </p>
+  </div>
+</Docs>

@@ -10,14 +10,21 @@
     "astro": "astro"
   },
   "dependencies": {
+    "@astrojs/react": "^5.0.3",
     "@astrojs/vercel": "^10.0.4",
     "@fontsource-variable/eb-garamond": "^5.2.7",
     "@fontsource-variable/instrument-sans": "^5.2.8",
     "@fontsource/caveat": "^5.2.8",
     "@fontsource/jetbrains-mono": "^5.2.8",
     "@tailwindcss/vite": "^4.2.3",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
     "@vercel/analytics": "^2.0.1",
     "astro": "^6.1.8",
+    "clsx": "^2.1.1",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
+    "tailwind-merge": "^3.5.0",
     "tailwindcss": "^4.2.3"
   }
 }

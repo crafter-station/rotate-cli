@@ -1,0 +1,171 @@
+---
+import Docs from "../../layouts/Docs.astro";
+import { ClerkLogo } from "../../components/logos/clerk";
+import { OpenAILogo } from "../../components/logos/openai";
+import { AnthropicLogo } from "../../components/logos/anthropic";
+import { ResendLogo } from "../../components/logos/resend";
+import { SupabaseLogo } from "../../components/logos/supabase";
+import { NeonLogo } from "../../components/logos/neon";
+import { VercelLogo } from "../../components/logos/vercel";
+import { GithubLogo } from "../../components/logos/github";
+import { UpstashLogo } from "../../components/logos/upstash";
+import { PolarLogo } from "../../components/logos/polar";
+import { TursoLogo } from "../../components/logos/turso";
+import { ElevenlabsLogo } from "../../components/logos/elevenlabs";
+import { FalLogo } from "../../components/logos/fal";
+import { ExaLogo } from "../../components/logos/exa";
+import { UploadthingLogo } from "../../components/logos/uploadthing";
+import { TriggerLogo } from "../../components/logos/trigger";
+import { FirecrawlLogo } from "../../components/logos/firecrawl";
+
+// Type-safe lookup by logo key
+const logoRegistry: Record<string, any> = {
+  clerk: ClerkLogo,
+  openai: OpenAILogo,
+  anthropic: AnthropicLogo,
+  resend: ResendLogo,
+  supabase: SupabaseLogo,
+  neon: NeonLogo,
+  vercel: VercelLogo,
+  github: GithubLogo,
+  upstash: UpstashLogo,
+  polar: PolarLogo,
+  turso: TursoLogo,
+  elevenlabs: ElevenlabsLogo,
+  fal: FalLogo,
+  exa: ExaLogo,
+  uploadthing: UploadthingLogo,
+  trigger: TriggerLogo,
+  firecrawl: FirecrawlLogo,
+};
+
+type Mode = "auto" | "manual-assist" | "no-check";
+
+interface AdapterRow {
+  name: string;          // rotate-cli adapter name
+  logo: keyof typeof logoRegistry;
+  provider: string;
+  envVars: string[];
+  mode: Mode;
+  strategy: string;      // ownership detection strategy summary
+  notes?: string;
+}
+
+const autoAdapters: AdapterRow[] = [
+  { name: "clerk", logo: "clerk", provider: "Clerk", envVars: ["CLERK_SECRET_KEY", "CLERK_WEBHOOK_SIGNING_SECRET"], mode: "auto", strategy: "format-decode + PLAPI JWKS" },
+  { name: "openai", logo: "openai", provider: "OpenAI", envVars: ["OPENAI_API_KEY", "OPENAI_ADMIN_KEY"], mode: "auto", strategy: "api-introspection /v1/me" },
+  { name: "anthropic", logo: "anthropic", provider: "Anthropic", envVars: ["ANTHROPIC_API_KEY", "ANTHROPIC_ADMIN_KEY"], mode: "auto", strategy: "list-match admin API keys" },
+  { name: "resend", logo: "resend", provider: "Resend", envVars: ["RESEND_API_KEY"], mode: "auto", strategy: "domain list-match" },
+  { name: "supabase", logo: "supabase", provider: "Supabase", envVars: ["SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_ANON_KEY", "SUPABASE_JWT_SECRET"], mode: "auto", strategy: "JWT decode + project ref" },
+  { name: "neon", logo: "neon", provider: "Neon (API key)", envVars: ["NEON_API_KEY"], mode: "auto", strategy: "GET /users/me" },
+  { name: "neon-connection", logo: "neon", provider: "Neon (DB)", envVars: ["DATABASE_URL", "POSTGRES_URL", "DATABASE_URL_UNPOOLED"], mode: "auto", strategy: "endpoint id reverse-index" },
+  { name: "vercel-token", logo: "vercel", provider: "Vercel token", envVars: ["VERCEL_TOKEN"], mode: "auto", strategy: "GET /v5/user/tokens/current" },
+  { name: "vercel-ai-gateway", logo: "vercel", provider: "Vercel AI Gateway", envVars: ["AI_GATEWAY_API_KEY"], mode: "auto", strategy: "prefix + liveness probe" },
+  { name: "github-token", logo: "github", provider: "GitHub token", envVars: ["GITHUB_TOKEN"], mode: "auto", strategy: "prefix-routed /user or /installation" },
+  { name: "upstash", logo: "upstash", provider: "Upstash Redis/Vector", envVars: ["UPSTASH_REDIS_REST_URL", "UPSTASH_REDIS_REST_TOKEN"], mode: "auto", strategy: "sha256 token hash + endpoint" },
+  { name: "polar", logo: "polar", provider: "Polar", envVars: ["POLAR_ACCESS_TOKEN", "POLAR_WEBHOOK_SECRET"], mode: "auto", strategy: "GET /v1/organizations + hash" },
+  { name: "fal", logo: "fal", provider: "fal.ai", envVars: ["FAL_API_KEY", "FAL_KEY"], mode: "auto", strategy: "key_id list-match" },
+  { name: "elevenlabs", logo: "elevenlabs", provider: "ElevenLabs", envVars: ["ELEVENLABS_API_KEY"], mode: "auto", strategy: "GET /v1/user" },
+  { name: "turso", logo: "turso", provider: "Turso", envVars: ["TURSO_AUTH_TOKEN", "TURSO_DATABASE_URL"], mode: "auto", strategy: "URL hostname decode" },
+  { name: "exa", logo: "exa", provider: "Exa", envVars: ["EXA_API_KEY"], mode: "auto", strategy: "Team Management API", notes: "new in v0.2" },
+];
+
+const manualAdapters: AdapterRow[] = [
+  { name: "uploadthing", logo: "uploadthing", provider: "UploadThing", envVars: ["UPLOADTHING_TOKEN"], mode: "manual-assist", strategy: "token format-decode", notes: "new in v0.2" },
+  { name: "vercel-blob", logo: "vercel", provider: "Vercel Blob", envVars: ["BLOB_READ_WRITE_TOKEN"], mode: "manual-assist", strategy: "ownership only (no rotation API)", notes: "new in v0.2" },
+  { name: "trigger-dev", logo: "trigger", provider: "Trigger.dev", envVars: ["TRIGGER_SECRET_KEY"], mode: "manual-assist", strategy: "none", notes: "new in v0.2" },
+  { name: "firecrawl", logo: "firecrawl", provider: "Firecrawl", envVars: ["FIRECRAWL_API_KEY"], mode: "manual-assist", strategy: "none", notes: "new in v0.2" },
+];
+
+const noCheckAdapters: AdapterRow[] = [
+  { name: "vercel-kv", logo: "vercel", provider: "Vercel KV (legacy)", envVars: ["KV_REST_API_URL", "KV_REST_API_TOKEN"], mode: "no-check", strategy: "delegates to upstash" },
+  { name: "local-random", logo: "vercel", provider: "Local random", envVars: ["SESSION_SECRET", "JWT_SECRET", "HMAC_SECRET"], mode: "no-check", strategy: "n/a — generated locally" },
+];
+
+const sections: Array<{ heading: string; subtitle: string; rows: AdapterRow[] }> = [
+  { heading: "Auto adapters", subtitle: "Rotate unattended. Safe in CI and agent mode.", rows: autoAdapters },
+  { heading: "Manual-assist adapters", subtitle: "Require interactive TTY. Run with `apply --manual-only`.", rows: manualAdapters },
+  { heading: "No-check adapters", subtitle: "No ownership detection. Treat as self by default.", rows: noCheckAdapters },
+];
+---
+
+<Docs
+  title="Adapters"
+  section="Reference"
+  description="Every provider supported by rotate-cli, with ownership detection strategy and rotation mode."
+>
+  <h1>Adapters</h1>
+  <p class="text-lg text-graphite">
+    {autoAdapters.length} auto + {manualAdapters.length} manual-assist
+    + {noCheckAdapters.length} no-check = {autoAdapters.length + manualAdapters.length + noCheckAdapters.length} providers supported.
+  </p>
+
+  <div class="callout">
+    <p>
+      <strong>What&apos;s a "mode"?</strong> <code>auto</code> adapters call
+      provider APIs to mint and revoke keys. <code>manual-assist</code>
+      adapters pause for the user to paste a new value from the provider
+      dashboard (because the provider doesn&apos;t expose a rotation API).
+      <code>no-check</code> adapters skip ownership detection entirely —
+      used for locally-generated secrets or alias adapters.
+    </p>
+  </div>
+
+  {
+    sections.map((section) => (
+      <>
+        <h2>{section.heading}</h2>
+        <p>{section.subtitle}</p>
+
+        <div class="not-prose grid gap-3 sm:grid-cols-2 my-6">
+          {section.rows.map((adapter) => {
+            const Logo = logoRegistry[adapter.logo];
+            return (
+              <div class="card p-4 flex items-start gap-4">
+                <div class="shrink-0 h-10 w-10 flex items-center justify-center rounded-[2px] bg-parchment p-1.5">
+                  <Logo className="h-full w-auto" />
+                </div>
+                <div class="min-w-0 flex-1">
+                  <div class="flex items-baseline justify-between gap-3">
+                    <code class="text-[0.85rem] font-medium text-ink">{adapter.name}</code>
+                    {adapter.notes && (
+                      <span class="text-[0.65rem] label">{adapter.notes}</span>
+                    )}
+                  </div>
+                  <p class="text-[0.85rem] text-graphite-mid mt-0.5 mb-2">{adapter.provider}</p>
+                  <p class="text-[0.78rem] text-graphite font-mono leading-tight">
+                    {adapter.envVars.join(", ")}
+                  </p>
+                  <p class="text-[0.78rem] text-graphite-mid mt-1.5 italic">{adapter.strategy}</p>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </>
+    ))
+  }
+
+  <h2>Env var → adapter mapping</h2>
+  <p>
+    <a href="/docs/scan">scan</a> matches env var names to adapters via a
+    built-in regex. If your var isn&apos;t on this list, it shows up as
+    "unmapped" in scan summary. File an issue or send a PR with the
+    mapping.
+  </p>
+
+  <h3>Unmapped but known providers</h3>
+  <p>
+    Providers researched but not yet implemented (tier 3, low impact):
+  </p>
+  <ul>
+    <li><strong>Groq</strong> (<code>GROQ_API_KEY</code>) — inference-only API, no key management</li>
+    <li><strong>Mistral</strong> (<code>MISTRAL_API_KEY</code>) — dashboard-only, no admin API</li>
+    <li><strong>Luma</strong> (<code>LUMA_API_KEY</code>) — dashboard-only, billable endpoints only</li>
+    <li><strong>Kapso</strong> (<code>KAPSO_API_KEY</code>) — internal platform, docs pending</li>
+    <li><strong>Electric SQL</strong> (<code>ELECTRIC_SECRET</code>) — CLI ORPC, future adapter</li>
+  </ul>
+  <p>
+    Full research reports at <a href="https://github.com/crafter-station/rotate-cli/tree/main/docs/adapter-research/unmapped">docs/adapter-research/unmapped/</a>.
+  </p>
+</Docs>

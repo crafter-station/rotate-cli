@@ -1,0 +1,17 @@
+---
+interface Props {
+  title?: string;
+}
+const { title } = Astro.props;
+---
+
+<div class="terminal relative">
+  {
+    title && (
+      <div class="absolute top-2 right-3 label text-xs text-parchment-shadow">
+        {title}
+      </div>
+    )
+  }
+  <pre class="m-0"><slot /></pre>
+</div>

@@ -1,0 +1,130 @@
+---
+import Docs from "../../layouts/Docs.astro";
+import Terminal from "../../components/Terminal.astro";
+---
+
+<Docs
+  title="Quickstart"
+  section="Getting started"
+  description="Rotate your first secret with rotate-cli in under 5 minutes."
+>
+  <h1>Quickstart</h1>
+  <p class="text-lg text-graphite">From zero to one rotated secret in 5 minutes.</p>
+
+  <h2>1 · Install and authenticate</h2>
+  <Terminal>
+<span class="prompt">$</span> <span class="kw">git clone</span> https://github.com/crafter-station/rotate-cli
+<span class="prompt">$</span> <span class="kw">cd</span> rotate-cli &amp;&amp; <span class="kw">bun install</span> &amp;&amp; <span class="kw">bun link</span>
+<span class="prompt">$</span> rotate-cli init          <span class="cmt"># creates ~/.config/rotate-cli/</span>
+<span class="prompt">$</span> rotate-cli auth login   <span class="cmt"># interactive picker</span>
+  </Terminal>
+
+  <p>
+    Auth is piggybacked from CLIs you already use. <code>rotate-cli</code>
+    reads <code>vercel login</code>&apos;s auth file, <code>gh auth token</code>,
+    and your <code>.env.local</code> for anything else.
+  </p>
+
+  <h2>2 · Scan</h2>
+  <p>
+    Enumerate every env var across every Vercel project your token can see.
+    Produces a cached <code>~/.config/rotate-cli/last-scan.json</code>.
+  </p>
+  <Terminal>
+<span class="prompt">$</span> rotate-cli scan
+
+<span class="cmt">Scanning 1 scope(s)...
+  ✓ crafter-station      318 projects · 462 secrets · 5.1s
+
+Total: 318 projects · 462 mapped · 366 unmapped
+
+Mapped by adapter:
+    99  clerk
+    80  upstash
+   148  neon-connection
+    29  vercel-ai-gateway
+    24  openai
+    ...
+
+Next:
+  → rotate-cli who --from-scan</span>
+  </Terminal>
+
+  <h2>3 · Who owns what</h2>
+  <p>
+    Before rotating anything, check which secrets are actually yours vs
+    someone else&apos;s (teammates who share the Vercel team).
+  </p>
+  <Terminal>
+<span class="prompt">$</span> rotate-cli who --from-scan --tag non-sensitive
+
+<span class="cmt">Preloading ownership indexes...
+  ✓ clerk             · 865ms
+  ✓ neon-connection   · 3.0s
+  ✓ vercel-siblings   · 98/126 projects decrypted · 14.3s
+
+Checking 451 secret(s)...
+  ✓ clerk-elements-CLERK_SECRET_KEY    self       [clerk]
+  ✗ resend-hack0-RESEND_API_KEY        other      [resend]
+  ? openai-semantik-OPENAI_API_KEY     unknown    [openai]
+  ...
+
+Summary: 77 self (58 unique), 280 other (145 unique), 69 unknown, 22 no-check</span>
+  </Terminal>
+
+  <div class="callout">
+    <p>
+      <strong>58 unique</strong> even though 77 <em>entries</em> show as self —
+      duplicate values (e.g. the same <code>CLERK_SECRET_KEY</code> in dev/preview/prod)
+      get deduped automatically during <code>apply</code>. You rotate once,
+      every copy updates.
+    </p>
+  </div>
+
+  <h2>4 · Apply (auto phase)</h2>
+  <p>
+    Rotate everything that can be automated, unattended. Manual-assist adapters
+    (providers without a public rotation API like Firecrawl or Trigger.dev)
+    get deferred to the next phase.
+  </p>
+  <Terminal>
+<span class="prompt">$</span> rotate-cli apply --from-scan --tag non-sensitive \
+    <span class="kw">--yes --confirm-bulk \
+    --reason</span> <span class="str">"vercel-apr-2026 breach"</span>
+
+<span class="cmt">Applying 58 rotation(s)...
+  [1/58] ✓ clerk-elements         rotated · 2.1s
+  [2/58] ✓ vercel-ai-gateway-lat…  rotated · 0.8s
+  ...
+  [58/58] ✓ resend-railly         rotated · 1.4s
+
+✓ 58 rotations in grace (1h)
+⚠ 18 rotation(s) deferred to manual phase:
+  firecrawl (10), trigger-dev (5), uploadthing (3)
+  → rotate-cli apply --from-scan --manual-only</span>
+  </Terminal>
+
+  <h2>5 · Apply (manual phase, optional)</h2>
+  <p>
+    Dashboard-only providers. rotate-cli opens the URL, you paste the new
+    value, propagation + verify happens automatically. <code>--manual-only</code>
+    requires an interactive TTY — agents can&apos;t run this phase.
+  </p>
+  <Terminal>
+<span class="prompt">$</span> rotate-cli apply --from-scan --manual-only \
+    <span class="kw">--reason</span> <span class="str">"vercel-apr-2026 breach"</span>
+
+<span class="cmt">[1/18] firecrawl-visionboard
+  → Open: https://firecrawl.dev/app/api-keys
+  → Create a key named "rotate-cli 2026-04-22"
+  → Paste the new FIRECRAWL_API_KEY here:</span> ▁
+  </Terminal>
+
+  <h2>6 · Revoke after grace</h2>
+  <Terminal>
+<span class="prompt">$</span> rotate-cli status              <span class="cmt"># see in-flight rotations</span>
+<span class="prompt">$</span> rotate-cli revoke &lt;rotation-id&gt; <span class="cmt"># close, old key invalidated</span>
+  </Terminal>
+
+  <p>That&apos;s it. See the <a href="/docs/apply">apply reference</a> for all flags.</p>
+</Docs>

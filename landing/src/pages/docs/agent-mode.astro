@@ -1,0 +1,149 @@
+---
+import Docs from "../../layouts/Docs.astro";
+import Terminal from "../../components/Terminal.astro";
+---
+
+<Docs
+  title="Agent mode"
+  section="Reference"
+  description="Hard guardrails for AI agents running rotate-cli. What agents can and can't do."
+>
+  <h1>Agent mode</h1>
+  <p class="text-lg text-graphite">
+    Hard guardrails for when an AI agent (Claude Code, Codex, Cursor
+    background loops) runs <code>rotate-cli</code> unattended.
+  </p>
+
+  <h2>How to enable</h2>
+  <Terminal>
+<span class="prompt">$</span> <span class="kw">export</span> ROTATE_CLI_AGENT_MODE=1
+<span class="prompt">$</span> rotate-cli apply ...
+  </Terminal>
+
+  <p>Or per-invocation:</p>
+  <Terminal>
+<span class="prompt">$</span> ROTATE_CLI_AGENT_MODE=1 rotate-cli apply ...
+  </Terminal>
+
+  <h2>What changes</h2>
+  <table>
+    <thead><tr><th>Behavior</th><th>Normal</th><th>Agent mode</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>Output format</td>
+        <td>Pretty (TTY) or JSON (piped)</td>
+        <td>Always JSON envelope</td>
+      </tr>
+      <tr>
+        <td>Interactive prompts</td>
+        <td>Allowed via <code>@clack/prompts</code></td>
+        <td>Refused — <code>unsupported</code> error</td>
+      </tr>
+      <tr>
+        <td><code>--yes</code></td>
+        <td>Optional</td>
+        <td>Required for any mutating action</td>
+      </tr>
+      <tr>
+        <td><code>--reason &lt;string&gt;</code></td>
+        <td>Optional</td>
+        <td>Required for any mutating action</td>
+      </tr>
+      <tr>
+        <td><code>--max-rotations &lt;n&gt;</code></td>
+        <td>Optional</td>
+        <td>Required for <code>apply</code> and <code>incident</code></td>
+      </tr>
+      <tr>
+        <td><code>--no-ownership-check</code></td>
+        <td>Allowed</td>
+        <td>Forbidden</td>
+      </tr>
+      <tr>
+        <td><code>--force-rotate-other</code></td>
+        <td>Allowed</td>
+        <td>Forbidden</td>
+      </tr>
+      <tr>
+        <td><code>--no-verify</code></td>
+        <td>Allowed</td>
+        <td>Forbidden</td>
+      </tr>
+      <tr>
+        <td><code>--manual-only</code></td>
+        <td>Allowed</td>
+        <td>Forbidden — manual-assist adapters can&apos;t run in agent mode</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>The contract</h2>
+  <p>
+    Every command in agent mode emits exactly one JSON line to stdout
+    with this shape:
+  </p>
+  <Terminal>
+<span class="kw">&#123;</span>
+  <span class="str">"version"</span>: <span class="str">"1"</span>,
+  <span class="str">"command"</span>: <span class="str">"apply"</span>,
+  <span class="str">"status"</span>: <span class="str">"success"</span> | <span class="str">"partial"</span> | <span class="str">"error"</span>,
+  <span class="str">"data"</span>: &#123; <span class="cmt">/* command-specific */</span> &#125;,
+  <span class="str">"errors"</span>: [&#123; <span class="str">"code"</span>: <span class="str">"..."</span>, <span class="str">"message"</span>: <span class="str">"..."</span>, ... &#125;],
+  <span class="str">"next_actions"</span>: [<span class="str">"..."</span>],
+  <span class="str">"meta"</span>: &#123; <span class="str">"duration_ms"</span>: 12000, <span class="str">"agent_mode"</span>: <span class="kw">true</span>, ... &#125;
+<span class="kw">&#125;</span>
+  </Terminal>
+
+  <h2>Exit codes</h2>
+  <table>
+    <thead><tr><th>Code</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td><code>0</code></td><td>All rotations succeeded.</td></tr>
+      <tr><td><code>1</code></td><td>User error (missing flag, invalid selector, selector matched nothing).</td></tr>
+      <tr><td><code>2</code></td><td>Provider error (one or more rotations failed at the adapter).</td></tr>
+      <tr><td><code>3</code></td><td>In-grace warning (partial success; some consumers still need to sync).</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Manual-assist adapters</h2>
+  <p>
+    Some providers (Firecrawl, Trigger.dev, Uploadthing) don&apos;t expose a
+    public rotation API. Their adapters declare <code>mode: "manual-assist"</code>
+    which requires an interactive terminal to paste the new value.
+  </p>
+  <p>
+    In agent mode, these adapters return a <code>code: "unsupported"</code>
+    error immediately. The agent should surface the deferred rotations to
+    the human user:
+  </p>
+  <Terminal>
+<span class="prompt">$</span> ROTATE_CLI_AGENT_MODE=1 rotate-cli apply --from-scan --auto-only --yes \
+    <span class="kw">--reason</span> <span class="str">"..."</span> <span class="kw">--max-rotations</span> 100
+
+<span class="kw">&#123;</span>
+  <span class="str">"status"</span>: <span class="str">"success"</span>,
+  <span class="str">"data"</span>: &#123;
+    <span class="str">"rotations"</span>: [ <span class="cmt">/* 58 auto */</span> ],
+    <span class="str">"deferred"</span>: [
+      &#123; <span class="str">"secret_id"</span>: <span class="str">"firecrawl-visionboard"</span>, <span class="str">"adapter"</span>: <span class="str">"firecrawl"</span> &#125;,
+      ...
+    ]
+  &#125;,
+  <span class="str">"next_actions"</span>: [<span class="str">"18 rotation(s) deferred: ... — run `rotate-cli apply --manual-only`"</span>]
+<span class="kw">&#125;</span>
+  </Terminal>
+
+  <h2>Audit log (recommended in agent mode)</h2>
+  <Terminal>
+<span class="prompt">$</span> ROTATE_CLI_AGENT_MODE=1 rotate-cli apply \
+    <span class="kw">--from-scan --yes</span> \
+    <span class="kw">--reason</span> <span class="str">"incident-response vercel-apr-2026"</span> \
+    <span class="kw">--max-rotations</span> 50 \
+    <span class="kw">--audit-log</span> ./rotations.log
+  </Terminal>
+
+  <p>
+    Every mutating step appends a structured JSON line. Use it to prove
+    to your security team what happened, when, and why.
+  </p>
+</Docs>

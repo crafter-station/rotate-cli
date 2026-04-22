@@ -1,0 +1,139 @@
+---
+import Docs from "../../layouts/Docs.astro";
+import Terminal from "../../components/Terminal.astro";
+---
+
+<Docs
+  title="who"
+  section="Commands"
+  description="Check which secrets belong to you vs teammates before rotating anything."
+>
+  <h1><code>who</code> (alias: <code>preview-ownership</code>)</h1>
+  <p class="text-lg text-graphite">
+    For each selected secret, decide: mine, someone else&apos;s, or
+    unknown. Hits only read-only endpoints. Never mutates anything.
+  </p>
+
+  <h2>Why this exists</h2>
+  <p>
+    In a shared Vercel team, a <code>CLERK_SECRET_KEY</code> in
+    <code>project-x</code> might belong to Cueva&apos;s Clerk account, not
+    yours. Rotating it with <em>your</em> PLAPI key would fail — or
+    worse, succeed against a Clerk instance you don&apos;t own and charge
+    you for billing. <code>who</code> catches that before rotation.
+  </p>
+
+  <h2>Usage</h2>
+  <Terminal>
+<span class="prompt">$</span> rotate-cli who [selector...] [flags]
+  </Terminal>
+
+  <h3>Selecting secrets</h3>
+  <table>
+    <thead><tr><th>Flag</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td><code>--from-scan</code></td><td>Use cached <code>rotate-cli scan</code> output (recommended).</td></tr>
+      <tr><td><code>--provider &lt;name&gt;</code></td><td>Filter by adapter (e.g. <code>clerk</code>).</td></tr>
+      <tr><td><code>--tag &lt;name&gt;</code></td><td>Filter by tag (e.g. <code>non-sensitive</code> from scan).</td></tr>
+      <tr><td><code>--scan-max-age 15m</code></td><td>Re-scan if cache older than this.</td></tr>
+      <tr><td><code>--fresh</code></td><td>Ignore cache, force a fresh scan.</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Verdicts</h2>
+  <table>
+    <thead>
+      <tr><th>Verdict</th><th>Glyph</th><th>What it means</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>self</strong></td>
+        <td><code>✓</code></td>
+        <td>Evidence the secret belongs to the authenticated admin. Safe to rotate.</td>
+      </tr>
+      <tr>
+        <td><strong>other</strong></td>
+        <td><code>✗</code></td>
+        <td>Evidence it belongs to another account. Rotating would fail or charge the wrong person.</td>
+      </tr>
+      <tr>
+        <td><strong>unknown</strong></td>
+        <td><code>?</code></td>
+        <td>Adapter couldn&apos;t decide. Usually provider API limitation or missing sibling hint.</td>
+      </tr>
+      <tr>
+        <td><strong>no-check</strong></td>
+        <td><code>○</code></td>
+        <td>Adapter has no ownership detection (e.g. <code>local-random</code> — you generated it).</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>Ownership strategies</h2>
+  <p>Different adapters use different strategies. All read-only, all documented in the evidence string on each check.</p>
+  <table>
+    <thead><tr><th>Strategy</th><th>Example</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>format-decode</strong></td>
+        <td>Clerk <code>pk_live_...</code> base64-decodes to a FAPI host; match against your Clerk instances.</td>
+      </tr>
+      <tr>
+        <td><strong>api-introspection</strong></td>
+        <td>OpenAI <code>/v1/me</code> returns the org id the key authenticates to.</td>
+      </tr>
+      <tr>
+        <td><strong>list-match</strong></td>
+        <td>Neon <code>/projects</code> enumerates your projects; decoded endpoint ids must be in the list.</td>
+      </tr>
+      <tr>
+        <td><strong>sibling-inheritance</strong></td>
+        <td>Clerk <code>CLERK_WEBHOOK_SECRET</code> has no owner info; inherits from <code>CLERK_SECRET_KEY</code> in the same project.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>Output</h2>
+  <Terminal>
+<span class="prompt">$</span> rotate-cli who --from-scan --tag non-sensitive
+
+<span class="cmt">Preloading ownership indexes...
+  ✓ clerk             · 865ms
+  ✓ upstash           · 1.2s
+  ✓ neon-connection   · 3.0s
+  ✓ vercel-siblings   · 98/126 projects decrypted · 14.3s
+
+Checking 451 secret(s)...
+
+  ✓ clerk-elements-CLERK_SECRET_KEY      self      [clerk] decoded FAPI host matches known host
+  ✗ upstash-onpe-bot-UPSTASH_REDIS_REST_URL other  [upstash] endpoint not in admin's index
+  ? openai-semantik-OPENAI_API_KEY       unknown   [openai] /v1/me no org info
+
+Summary: 77 self (58 unique), 280 other (145 unique), 69 unknown, 22 no-check</span>
+  </Terminal>
+
+  <p>
+    The <code>(N unique)</code> tells you how many actual rotations
+    <code>apply</code> will do — duplicate values across projects get
+    deduped (see <a href="/docs/apply">apply</a>).
+  </p>
+
+  <h2>JSON envelope</h2>
+  <Terminal>
+<span class="kw">&#123;</span>
+  <span class="str">"command"</span>: <span class="str">"preview-ownership"</span>,
+  <span class="str">"data"</span>: &#123;
+    <span class="str">"checks"</span>: [&#123;
+      <span class="str">"secret_id"</span>: <span class="str">"clerk-elements-CLERK_SECRET_KEY"</span>,
+      <span class="str">"verdict"</span>: <span class="str">"self"</span>,
+      <span class="str">"confidence"</span>: <span class="str">"high"</span>,
+      <span class="str">"strategy"</span>: <span class="str">"format-decode"</span>,
+      <span class="str">"value_hash"</span>: <span class="str">"a1b2c3d4e5f6"</span>,
+      <span class="str">"evidence"</span>: <span class="str">"decoded FAPI host matches..."</span>
+    &#125;],
+    <span class="str">"summary"</span>: &#123; <span class="str">"self"</span>: 77, <span class="str">"other"</span>: 280, ... &#125;,
+    <span class="str">"unique_counts"</span>: &#123; <span class="str">"self"</span>: 58, <span class="str">"other"</span>: 145 &#125;
+  &#125;
+<span class="kw">&#125;</span>
+  </Terminal>
+</Docs>

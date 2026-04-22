@@ -1,0 +1,72 @@
+---
+import Docs from "../../layouts/Docs.astro";
+import Terminal from "../../components/Terminal.astro";
+---
+
+<Docs
+  title="status & revoke"
+  section="Commands"
+  description="Track rotations in flight and close them out after grace."
+>
+  <h1><code>status</code> &amp; <code>revoke</code></h1>
+
+  <h2><code>rotate-cli status</code> (alias <code>ps</code>)</h2>
+  <p>List rotations currently in flight or in grace. Pass a rotation-id for details.</p>
+
+  <Terminal>
+<span class="prompt">$</span> rotate-cli status
+
+<span class="cmt">rotate-cli status
+
+3 rotation(s) in flight
+
+  ● rot_mo9kfx2a  in_grace  clerk-elements
+      grace ends 2026-04-22 16:30 UTC
+  ● rot_mo9kfy3b  in_grace  resend-railly
+      grace ends 2026-04-22 16:30 UTC
+  ● rot_mo9kfz4c  failed    supabase-kebo-api
+
+Next:
+  → rotate-cli revoke &lt;rotation-id&gt;  when consumers are synced</span>
+  </Terminal>
+
+  <h3>Inspect one rotation</h3>
+  <Terminal>
+<span class="prompt">$</span> rotate-cli status rot_mo9kfx2a --json
+  </Terminal>
+
+  <h2><code>rotate-cli revoke &lt;rotation-id&gt;</code></h2>
+  <p>
+    Close a rotation: invalidate the old secret. Only works when the
+    rotation is in grace and all consumers have verified sync.
+  </p>
+
+  <table>
+    <thead><tr><th>Flag</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td><code>--force-revoke</code></td><td>Revoke even if some consumers are still unsynced (last resort).</td></tr>
+      <tr><td><code>--reason &lt;string&gt;</code></td><td>Justification (required in agent mode).</td></tr>
+      <tr><td><code>--audit-log &lt;path&gt;</code></td><td>Append to existing audit trail.</td></tr>
+    </tbody>
+  </table>
+
+  <Terminal>
+<span class="prompt">$</span> rotate-cli revoke rot_mo9kfx2a
+
+<span class="cmt">rotate-cli revoke
+
+  ✓ rot_mo9kfx2a closed
+      old secret invalidated; grace period ended</span>
+  </Terminal>
+
+  <h2>Audit trail</h2>
+  <p>
+    Every create, propagate, trigger, verify, and revoke step appends
+    a JSON line to the audit log:
+  </p>
+  <Terminal>
+<span class="cmt"># ./audit.log</span>
+<span class="kw">&#123;</span><span class="str">"timestamp"</span>:<span class="str">"..."</span>,<span class="str">"rotation_id"</span>:<span class="str">"rot_mo9kfx2a"</span>,<span class="str">"secret_id"</span>:<span class="str">"clerk-elements"</span>,<span class="str">"adapter"</span>:<span class="str">"clerk"</span>,<span class="str">"status"</span>:<span class="str">"in_grace"</span>,<span class="str">"agent_mode"</span>:false,...<span class="kw">&#125;</span>
+<span class="kw">&#123;</span><span class="str">"timestamp"</span>:<span class="str">"..."</span>,<span class="str">"rotation_id"</span>:<span class="str">"rot_mo9kfx2a"</span>,<span class="str">"status"</span>:<span class="str">"revoked"</span>,...<span class="kw">&#125;</span>
+  </Terminal>
+</Docs>

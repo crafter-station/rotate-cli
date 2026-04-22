@@ -1,0 +1,87 @@
+---
+import Docs from "../../layouts/Docs.astro";
+import Terminal from "../../components/Terminal.astro";
+---
+
+<Docs
+  title="Intro"
+  section="Introduction"
+  description="rotate-cli is an agent-first secrets rotation CLI. Local-first, zero servers, hard guardrails for AI agents."
+>
+  <h1>rotate-cli</h1>
+  <p class="text-lg text-graphite">
+    Agent-first secrets rotation. Local-first. Zero servers.
+  </p>
+
+  <p>
+    <code>rotate-cli</code> rotates API keys and secrets across 22 providers
+    (Clerk, OpenAI, Anthropic, Resend, Neon, Supabase, Upstash, Vercel, and
+    more), then propagates the new values to every downstream consumer
+    (Vercel env vars, GitHub Actions secrets, local <code>.env</code> files).
+    The master credentials never leave your machine.
+  </p>
+
+  <div class="callout">
+    <p>
+      <strong>Why build this?</strong> April 2026 Vercel breach exposed
+      ~1,500 env vars across 500 projects. Rotating that by hand takes
+      days and breaks production. rotate-cli does it in minutes with a
+      fail-forward grace period and verify-based revoke.
+    </p>
+  </div>
+
+  <h2>Install</h2>
+  <Terminal>
+<span class="cmt"># Clone + build from source (npm publish pending)</span>
+<span class="prompt">$</span> <span class="kw">git clone</span> https://github.com/crafter-station/rotate-cli
+<span class="prompt">$</span> <span class="kw">cd</span> rotate-cli &amp;&amp; <span class="kw">bun install</span>
+<span class="prompt">$</span> <span class="kw">bun link</span>   <span class="cmt"># exposes `rotate-cli` globally</span>
+  </Terminal>
+
+  <h2>Three commands, one flow</h2>
+  <p>
+    The whole tool is three commands that build on each other. If you
+    have a Vercel token, you don&apos;t need a config file.
+  </p>
+
+  <ol>
+    <li>
+      <strong><a href="/docs/scan">scan</a></strong> — enumerate every env var across every Vercel
+      project you can see. Maps each to a rotate-cli adapter.
+    </li>
+    <li>
+      <strong><a href="/docs/who">who</a></strong> — for each mapped secret, decide
+      whether it belongs to <em>you</em>, to <em>someone else on the team</em>,
+      or can&apos;t be determined. Avoids rotating Cueva&apos;s keys and charging
+      your billing.
+    </li>
+    <li>
+      <strong><a href="/docs/apply">apply</a></strong> — rotate, propagate, verify, grace,
+      revoke. Splits into <code>--auto-only</code> (unattended, fast) and
+      <code>--manual-only</code> (interactive for dashboard-only providers).
+    </li>
+  </ol>
+
+  <h2>The agent contract</h2>
+  <p>
+    Every command emits a JSON envelope (or pretty output for humans). In
+    agent mode, the CLI refuses any action missing <code>--reason</code>,
+    <code>--yes</code>, or <code>--max-rotations</code>. Manual-assist
+    adapters auto-fail in agent mode — agents can&apos;t paste dashboard values.
+  </p>
+
+  <Terminal title="agent mode">
+<span class="prompt">$</span> ROTATE_CLI_AGENT_MODE=1 rotate-cli apply \
+    <span class="kw">--from-scan --yes</span> \
+    <span class="kw">--reason</span> <span class="str">"vercel-apr-2026 breach response"</span> \
+    <span class="kw">--max-rotations</span> 50 \
+    <span class="kw">--audit-log</span> ./audit.log
+  </Terminal>
+
+  <h2>Next</h2>
+  <ul>
+    <li><a href="/docs/quickstart">Quickstart</a> — 5 minutes, piloto with 2 keys</li>
+    <li><a href="/docs/adapters">Adapters reference</a> — all 22 providers</li>
+    <li><a href="/docs/agent-mode">Agent mode guardrails</a> — what agents can and can&apos;t do</li>
+  </ul>
+</Docs>

@@ -1,0 +1,121 @@
+---
+import Docs from "../../layouts/Docs.astro";
+import Terminal from "../../components/Terminal.astro";
+---
+
+<Docs
+  title="apply"
+  section="Commands"
+  description="Rotate secrets: create new, propagate to consumers, verify, enter grace. Split into auto and manual-assist phases."
+>
+  <h1><code>apply</code></h1>
+  <p class="text-lg text-graphite">
+    Rotate, propagate, verify, grace. Split into two phases so auto
+    adapters run unattended and manual-assist adapters don&apos;t block CI.
+  </p>
+
+  <h2>The two phases</h2>
+  <div class="callout">
+    <p>
+      <strong>Default is <code>--auto-only</code>.</strong> Pass
+      <code>--manual-only</code> explicitly to run the interactive phase.
+      The two are mutually exclusive. Auto completes in minutes; manual
+      pauses per rotation and takes as long as you need.
+    </p>
+  </div>
+
+  <h3><code>--auto-only</code> (default)</h3>
+  <p>
+    Runs every adapter with <code>mode: "auto"</code>. Unattended, safe
+    in CI, safe in agent mode. Adapters with <code>mode: "manual-assist"</code>
+    are deferred — the CLI announces them at the end with a
+    <code>rotate-cli apply --manual-only</code> hint.
+  </p>
+
+  <h3><code>--manual-only</code></h3>
+  <p>
+    Runs adapters with <code>mode: "manual-assist"</code>. Each rotation
+    pauses:
+  </p>
+  <ol>
+    <li>CLI prints the dashboard URL and instructions.</li>
+    <li>You create the new secret in the provider dashboard, paste it.</li>
+    <li>CLI verifies, propagates to consumers, starts grace.</li>
+    <li>After grace, CLI prompts for revoke — you delete the old secret in the dashboard.</li>
+  </ol>
+  <p>Requires an interactive TTY. Agent mode refuses this flag.</p>
+
+  <h2>Full flag list</h2>
+  <table>
+    <thead>
+      <tr><th>Flag</th><th>Meaning</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>--provider &lt;name&gt;</code></td><td>Filter by adapter.</td></tr>
+      <tr><td><code>--tag &lt;name&gt;</code></td><td>Filter by tag (<code>non-sensitive</code>, <code>sensitive</code>).</td></tr>
+      <tr><td><code>--from-scan</code></td><td>Read the scan cache instead of <code>rotate.config.yaml</code>.</td></tr>
+      <tr><td><code>--auto-only</code></td><td>Default. Run only <code>mode: "auto"</code> adapters.</td></tr>
+      <tr><td><code>--manual-only</code></td><td>Run only <code>mode: "manual-assist"</code> adapters.</td></tr>
+      <tr><td><code>--confirm-bulk</code></td><td>Required when <code>--from-scan</code> picks &gt;20 rotations.</td></tr>
+      <tr><td><code>--yes</code></td><td>Skip interactive confirmations.</td></tr>
+      <tr><td><code>--reason &lt;string&gt;</code></td><td>Justification (required in agent mode).</td></tr>
+      <tr><td><code>--max-rotations &lt;n&gt;</code></td><td>Hard cap (required in agent mode).</td></tr>
+      <tr><td><code>--skip-unknown</code></td><td>Skip secrets where ownership couldn&apos;t be determined.</td></tr>
+      <tr><td><code>--force-rotate-other</code></td><td>Rotate even when ownership says "other" (dangerous).</td></tr>
+      <tr><td><code>--no-ownership-check</code></td><td>Disable the gate entirely (forbidden in agent mode).</td></tr>
+      <tr><td><code>--parallel &lt;n&gt;</code></td><td>Consumer propagation concurrency (default 10).</td></tr>
+      <tr><td><code>--no-verify</code></td><td>Skip verify step (forbidden in agent mode).</td></tr>
+      <tr><td><code>--audit-log &lt;path&gt;</code></td><td>Append-only JSON audit of every action.</td></tr>
+    </tbody>
+  </table>
+
+  <h2>How it works</h2>
+  <ol>
+    <li><strong>Ownership gate</strong> — re-runs <code>who</code> logic, skips <code>other</code> unless <code>--force-rotate-other</code>.</li>
+    <li><strong>Dedup</strong> — groups entries by <code>(adapter, hash(currentValue))</code>. Same value across projects = one rotation, all copies updated.</li>
+    <li><strong>Create</strong> — adapter mints a new secret (auto mode) or prompts user (manual mode).</li>
+    <li><strong>Propagate</strong> — each registered consumer writes the new value (Vercel env, GitHub secret, local <code>.env</code>).</li>
+    <li><strong>Trigger</strong> — fire redeploys or workflows if the consumer supports it.</li>
+    <li><strong>Verify</strong> — hit the deployment&apos;s canonical endpoint with the new value.</li>
+    <li><strong>Grace</strong> — rotation enters 1h grace period with old secret still valid. Use <code>rotate-cli status</code> to watch.</li>
+    <li><strong>Revoke</strong> — <code>rotate-cli revoke &lt;rotation-id&gt;</code> when consumers are synced. Old secret invalidated.</li>
+  </ol>
+
+  <h2>Example — bulk incident response</h2>
+  <Terminal>
+<span class="prompt">$</span> rotate-cli apply --from-scan --tag non-sensitive \
+    <span class="kw">--yes --confirm-bulk \
+    --reason</span> <span class="str">"vercel-apr-2026 breach"</span>
+
+<span class="cmt">Fetching siblings... ✓ 14.3s
+Grouping 76 entries... 58 unique, 18 deferred to manual phase
+
+[1/58] ✓ clerk-elements                 rotated · 2.1s
+[2/58] ✓ vercel-ai-gateway-latex0        rotated · 0.8s
+...
+[58/58] ✓ resend-railly                  rotated · 1.4s
+
+✓ 58 rotations in grace (1h)
+⚠ 18 rotation(s) deferred to the other phase:
+  firecrawl (10), trigger-dev (5), uploadthing (3)
+  → rotate-cli apply --from-scan --manual-only</span>
+  </Terminal>
+
+  <h2>JSON envelope</h2>
+  <Terminal>
+<span class="kw">&#123;</span>
+  <span class="str">"command"</span>: <span class="str">"apply"</span>,
+  <span class="str">"status"</span>: <span class="str">"success"</span>,
+  <span class="str">"data"</span>: &#123;
+    <span class="str">"mode"</span>: <span class="str">"auto-only"</span>,
+    <span class="str">"rotations"</span>: [&#123; <span class="str">"rotation_id"</span>: <span class="str">"rot_123"</span>, <span class="str">"status"</span>: <span class="str">"in_grace"</span>, ... &#125;],
+    <span class="str">"deferred"</span>: [&#123; <span class="str">"secret_id"</span>: <span class="str">"firecrawl-visionboard"</span>, <span class="str">"adapter"</span>: <span class="str">"firecrawl"</span> &#125;],
+    <span class="str">"ownership_summary"</span>: &#123; <span class="str">"self"</span>: 58, <span class="str">"other"</span>: 0, ... &#125;
+  &#125;,
+  <span class="str">"next_actions"</span>: [
+    <span class="str">"Run `rotate status rot_123 --json` to check sync; `rotate revoke rot_123` when ready"</span>,
+    <span class="str">"18 rotation(s) deferred to the other phase: firecrawl (10), ... — run `rotate-cli apply --manual-only`"</span>
+  ]
+<span class="kw">&#125;</span>
+  </Terminal>
+</Docs>
