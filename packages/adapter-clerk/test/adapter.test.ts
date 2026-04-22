@@ -172,15 +172,16 @@ describe("adapter-clerk.ownedBy", () => {
     );
   });
 
-  test("returns unknown on JWKS 401", async () => {
+  test("returns other on JWKS 401 (sk_ rejected by PLAPI → belongs elsewhere)", async () => {
     mockFetch(() => new Response("unauthorized", { status: 401 }));
 
     const result = await clerkAdapter.ownedBy?.("sk_live_candidate", mockCtx, {
       preload: { knownKids: ["ins_known_abc"] },
     });
 
-    expect(result?.verdict).toBe("unknown");
+    expect(result?.verdict).toBe("other");
     expect(result?.adminCanBill).toBe(false);
+    expect(result?.confidence).toBe("medium");
     expect(result?.strategy).toBe("api-introspection");
   });
 

@@ -298,7 +298,18 @@ export const clerkAdapter: Adapter = {
       });
 
       if (res.status === 401 || res.status === 403) {
-        return unknownOwnership("Clerk JWKS introspection was not authorized", "api-introspection");
+        // sk_ doesn't authenticate against any of our instances — strong
+        // signal it belongs to another Clerk account. Medium confidence
+        // catches the edge where the sk_ is expired (rotated by someone)
+        // but was ours originally.
+        return {
+          verdict: "other",
+          adminCanBill: false,
+          scope: "project",
+          confidence: "medium",
+          evidence: `Clerk secret key was rejected by PLAPI (${res.status}) — not associated with any instance visible to the authenticated admin`,
+          strategy: "api-introspection",
+        };
       }
       if (res.status === 429) {
         return unknownOwnership("Clerk ownership check was rate limited", "api-introspection");
