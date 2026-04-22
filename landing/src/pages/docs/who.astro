@@ -18,7 +18,7 @@ import Terminal from "../../components/Terminal.astro";
   <p>
     In a shared Vercel team, a <code>CLERK_SECRET_KEY</code> in
     <code>project-x</code> might belong to Cueva&apos;s Clerk account, not
-    yours. Rotating it with <em>your</em> PLAPI key would fail — or
+    yours. Rotating it with <em>your</em> PLAPI key would fail, or
     worse, succeed against a Clerk instance you don&apos;t own and charge
     you for billing. <code>who</code> catches that before rotation.
   </p>
@@ -64,7 +64,7 @@ import Terminal from "../../components/Terminal.astro";
       <tr>
         <td><strong>no-check</strong></td>
         <td><code>○</code></td>
-        <td>Adapter has no ownership detection (e.g. <code>local-random</code> — you generated it).</td>
+        <td>Adapter has no ownership detection (e.g. <code>local-random</code>, you generated it).</td>
       </tr>
     </tbody>
   </table>
@@ -114,7 +114,7 @@ Summary: 77 self (58 unique), 280 other (145 unique), 69 unknown, 22 no-check</s
 
   <p>
     The <code>(N unique)</code> tells you how many actual rotations
-    <code>apply</code> will do — duplicate values across projects get
+    <code>apply</code> will do, duplicate values across projects get
     deduped (see <a href="/docs/apply">apply</a>).
   </p>
 

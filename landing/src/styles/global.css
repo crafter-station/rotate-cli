@@ -28,9 +28,41 @@
   --font-hand: "Caveat", Kalam, cursive;
 }
 
+/*
+  Tailwind v4 reads CSS custom properties from :root. The @theme block above
+  gives us utility classes (bg-parchment, text-ink, etc). For a runtime
+  theme toggle we override the same custom property names on [data-theme=dark]
+  so every utility instantly picks up the inverted palette without rebuilding
+  anything.
+
+  Dark palette is an inversion of the parchment aesthetic: a deep sepia-black
+  page with a warm cream foreground. Accent colors brighten slightly so they
+  read on dark backgrounds while keeping the bronze/gold character.
+*/
+[data-theme="dark"] {
+  --color-parchment: #1a1612;
+  --color-parchment-cream: #2a241c;
+  --color-parchment-shadow: #7a7162;
+  --color-parchment-surface: #231e17;
+
+  --color-ink: #f2eee4;
+  --color-graphite: #d4cab5;
+  --color-graphite-mid: #9a8f7c;
+
+  --color-bronze: #c8a369;
+  --color-gold: #d9b573;
+  --color-sepia: #e2d6bc;
+
+  --color-ember: #b5614a;
+}
+
 @layer base {
   :root {
     color-scheme: light;
+  }
+
+  [data-theme="dark"] {
+    color-scheme: dark;
   }
 
   html {
@@ -44,9 +76,15 @@
   }
 
   body {
-    /* parchment grain overlay — SVG turbulence */
+    /* parchment grain overlay, SVG turbulence */
     background-image:
       url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.102 0 0 0 0 0.086 0 0 0 0 0.071 0 0 0 0.06 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+  }
+
+  [data-theme="dark"] body {
+    /* softer cream grain for the dark palette so highlights stay muted */
+    background-image:
+      url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.95 0 0 0 0 0.93 0 0 0 0 0.89 0 0 0 0.04 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
   }
 
   h1,
@@ -124,22 +162,60 @@
     border-radius: 2px;
   }
 
-  /* terminal-on-parchment code block */
+  /*
+    Terminal code block. Pinned to its own palette vars so the contrast
+    stays readable in both themes. Default light theme gives dark terminal
+    on cream page; dark theme gives an even darker terminal on dark page
+    with slightly brighter foreground.
+  */
+  :root {
+    --terminal-bg: #1a1612;
+    --terminal-fg: #e8e1d3;
+    --terminal-prompt: #b8954e;
+    --terminal-comment: #a39b89;
+    --terminal-string: #d9b573;
+    --terminal-keyword: #e8e1d3;
+    --terminal-shadow: rgba(26, 22, 18, 0.35);
+    --terminal-border: transparent;
+  }
+
+  [data-theme="dark"] {
+    --terminal-bg: #0f0c09;
+    --terminal-fg: #d4cab5;
+    --terminal-prompt: #d9b573;
+    --terminal-comment: #6b6253;
+    --terminal-string: #e2c592;
+    --terminal-keyword: #f2eee4;
+    --terminal-shadow: rgba(0, 0, 0, 0.55);
+    --terminal-border: rgba(242, 238, 228, 0.06);
+  }
+
   .terminal {
-    background: var(--color-ink);
-    color: var(--color-parchment);
+    background: var(--terminal-bg);
+    color: var(--terminal-fg);
     font-family: var(--font-mono);
     font-size: 0.9375rem;
     padding: 1.25rem 1.5rem;
     border-radius: 2px;
+    border: 1px solid var(--terminal-border);
     box-shadow:
-      0 1px 0 rgba(26, 22, 18, 0.15),
-      0 12px 32px -12px rgba(26, 22, 18, 0.35);
+      0 1px 0 var(--terminal-shadow),
+      0 12px 32px -12px var(--terminal-shadow);
     overflow-x: auto;
   }
 
-  .terminal .prompt { color: var(--color-gold); }
-  .terminal .cmt { color: var(--color-graphite-mid); }
-  .terminal .str { color: var(--color-gold); }
-  .terminal .kw { color: var(--color-parchment-cream); font-weight: 500; }
+  .terminal .prompt { color: var(--terminal-prompt); }
+  .terminal .cmt { color: var(--terminal-comment); }
+  .terminal .str { color: var(--terminal-string); }
+  .terminal .kw { color: var(--terminal-keyword); font-weight: 500; }
+
+  /*
+    Inline code. The ink/5 tint needs to work on both backgrounds. We
+    use color-mix with the theme's ink so it tracks light/dark.
+  */
+  :not(pre) > code {
+    background: color-mix(in oklab, var(--color-ink) 7%, transparent);
+    padding: 0.08em 0.35em;
+    border-radius: 2px;
+  }
 }

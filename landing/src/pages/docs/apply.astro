@@ -28,7 +28,7 @@ import Terminal from "../../components/Terminal.astro";
   <p>
     Runs every adapter with <code>mode: "auto"</code>. Unattended, safe
     in CI, safe in agent mode. Adapters with <code>mode: "manual-assist"</code>
-    are deferred — the CLI announces them at the end with a
+    are deferred. The CLI announces them at the end with a
     <code>rotate-cli apply --manual-only</code> hint.
   </p>
 
@@ -41,7 +41,7 @@ import Terminal from "../../components/Terminal.astro";
     <li>CLI prints the dashboard URL and instructions.</li>
     <li>You create the new secret in the provider dashboard, paste it.</li>
     <li>CLI verifies, propagates to consumers, starts grace.</li>
-    <li>After grace, CLI prompts for revoke — you delete the old secret in the dashboard.</li>
+    <li>After grace, CLI prompts for revoke, you delete the old secret in the dashboard.</li>
   </ol>
   <p>Requires an interactive TTY. Agent mode refuses this flag.</p>
 
@@ -71,17 +71,17 @@ import Terminal from "../../components/Terminal.astro";
 
   <h2>How it works</h2>
   <ol>
-    <li><strong>Ownership gate</strong> — re-runs <code>who</code> logic, skips <code>other</code> unless <code>--force-rotate-other</code>.</li>
-    <li><strong>Dedup</strong> — groups entries by <code>(adapter, hash(currentValue))</code>. Same value across projects = one rotation, all copies updated.</li>
-    <li><strong>Create</strong> — adapter mints a new secret (auto mode) or prompts user (manual mode).</li>
-    <li><strong>Propagate</strong> — each registered consumer writes the new value (Vercel env, GitHub secret, local <code>.env</code>).</li>
-    <li><strong>Trigger</strong> — fire redeploys or workflows if the consumer supports it.</li>
-    <li><strong>Verify</strong> — hit the deployment&apos;s canonical endpoint with the new value.</li>
-    <li><strong>Grace</strong> — rotation enters 1h grace period with old secret still valid. Use <code>rotate-cli status</code> to watch.</li>
-    <li><strong>Revoke</strong> — <code>rotate-cli revoke &lt;rotation-id&gt;</code> when consumers are synced. Old secret invalidated.</li>
+    <li><strong>Ownership gate.</strong> Re-runs <code>who</code> logic, skips <code>other</code> unless <code>--force-rotate-other</code>.</li>
+    <li><strong>Dedup.</strong> Groups entries by <code>(adapter, hash(currentValue))</code>. Same value across projects becomes one rotation with all copies updated.</li>
+    <li><strong>Create.</strong> Adapter mints a new secret (auto mode) or prompts the user (manual mode).</li>
+    <li><strong>Propagate.</strong> Each registered consumer writes the new value (Vercel env, GitHub secret, local <code>.env</code>).</li>
+    <li><strong>Trigger.</strong> Fire redeploys or workflows if the consumer supports it.</li>
+    <li><strong>Verify.</strong> Hit the deployment&apos;s canonical endpoint with the new value.</li>
+    <li><strong>Grace.</strong> Rotation enters a 1h grace period with the old secret still valid. Use <code>rotate-cli status</code> to watch.</li>
+    <li><strong>Revoke.</strong> <code>rotate-cli revoke &lt;rotation-id&gt;</code> when consumers are synced. Old secret invalidated.</li>
   </ol>
 
-  <h2>Example — bulk incident response</h2>
+  <h2>Example: bulk incident response</h2>
   <Terminal>
 <span class="prompt">$</span> rotate-cli apply --from-scan --tag non-sensitive \
     <span class="kw">--yes --confirm-bulk \
@@ -114,7 +114,7 @@ Grouping 76 entries... 58 unique, 18 deferred to manual phase
   &#125;,
   <span class="str">"next_actions"</span>: [
     <span class="str">"Run `rotate status rot_123 --json` to check sync; `rotate revoke rot_123` when ready"</span>,
-    <span class="str">"18 rotation(s) deferred to the other phase: firecrawl (10), ... — run `rotate-cli apply --manual-only`"</span>
+    <span class="str">"18 rotation(s) deferred to the other phase: firecrawl (10), ..., run `rotate-cli apply --manual-only`"</span>
   ]
 <span class="kw">&#125;</span>
   </Terminal>

@@ -1,6 +1,8 @@
 ---
 import Base from "../layouts/Base.astro";
 import KingMark from "../components/KingMark.astro";
+import LogoThemed from "../components/LogoThemed.astro";
+import ThemeToggle from "../components/ThemeToggle.astro";
 import { ClerkLogo } from "../components/logos/clerk";
 import { OpenAILogo } from "../components/logos/openai";
 import { AnthropicLogo } from "../components/logos/anthropic";
@@ -88,7 +90,7 @@ const rotations = [
       </h1>
       <p class="mt-8 max-w-2xl text-lg text-graphite">
         <code class="bg-ink/5 px-1.5 py-0.5 rounded-[2px]">rotate-cli</code> is the first secrets rotation tool
-        built for the AI-native stack. Your master credentials never leave your machine —
+        built for the AI-native stack. Your master credentials never leave your machine. They are
         borrowed from CLIs you already trust. Agents can rotate safely with hard guardrails.
       </p>
 
@@ -108,6 +110,7 @@ const rotations = [
         <a href="#quickstart" class="text-ink hover:text-bronze no-underline px-3">
           Quick start →
         </a>
+        <ThemeToggle />
       </div>
 
       <p class="hand mt-10 text-xl">
@@ -165,7 +168,7 @@ const rotations = [
       <pre class="terminal mt-10"><code><span class="cmt"># 1. describe the secrets and their consumers</span>
 <span class="prompt">$</span> rotate init
 
-<span class="cmt"># 2. see the plan — no mutation</span>
+<span class="cmt"># 2. see the plan, no mutation</span>
 <span class="prompt">$</span> rotate plan --tag production
 
 <span class="cmt"># 3. respond to an incident</span>
@@ -206,7 +209,10 @@ const rotations = [
               <div class="flex items-center justify-between mb-3">
                 {Logo ? (
                   <div class="h-7 w-7 flex items-center justify-center">
-                    <Logo className="h-full w-auto text-ink" />
+                    <LogoThemed class="h-full w-full">
+                      <Logo slot="light" mode="light" className="h-full w-auto" />
+                      <Logo slot="dark" mode="dark" className="h-full w-auto" />
+                    </LogoThemed>
                   </div>
                 ) : (
                   <div class="h-7 w-7" />
@@ -244,7 +250,7 @@ const rotations = [
         The CLI refuses to rotate without a <code class="bg-ink/5 px-1 rounded-[2px]">--reason</code>
         that lands in the audit log, a hard cap on blast radius, and an append-only JSONL
         trail. Revoking the old secret always takes an explicit
-        <code class="bg-ink/5 px-1 rounded-[2px]">--force-revoke</code> — agents can rotate
+        <code class="bg-ink/5 px-1 rounded-[2px]">--force-revoke</code>, agents can rotate
         eagerly and revoke conservatively.
       </p>
 
@@ -256,12 +262,12 @@ const rotations = [
 </code></pre>
 
       <ul class="mt-8 grid grid-cols-1 md:grid-cols-2 gap-4 text-sm text-graphite">
-        <li><strong class="text-ink">--reason required</strong> — ≥5 chars, lands in audit log</li>
-        <li><strong class="text-ink">Rate limit</strong> — max 1 rotation / minute / machine</li>
-        <li><strong class="text-ink">Consumer cap</strong> — max 50 per rotation</li>
-        <li><strong class="text-ink">--no-verify forbidden</strong> — never skip verify in agent mode</li>
-        <li><strong class="text-ink">--audit-log required</strong> — append-only JSONL</li>
-        <li><strong class="text-ink">--force-revoke</strong> — invalidate old secret explicitly</li>
+        <li><strong class="text-ink">--reason required</strong>, ≥5 chars, lands in audit log</li>
+        <li><strong class="text-ink">Rate limit</strong>, max 1 rotation / minute / machine</li>
+        <li><strong class="text-ink">Consumer cap</strong>, max 50 per rotation</li>
+        <li><strong class="text-ink">--no-verify forbidden</strong>, never skip verify in agent mode</li>
+        <li><strong class="text-ink">--audit-log required</strong>, append-only JSONL</li>
+        <li><strong class="text-ink">--force-revoke</strong>, invalidate old secret explicitly</li>
       </ul>
     </div>
   </section>
@@ -278,7 +284,7 @@ const rotations = [
         or from env vars you provide.
       </p>
       <p class="mt-4 max-w-2xl text-graphite">
-        A centralized rotation service is itself a breach target — the exact pattern that
+        A centralized rotation service is itself a breach target, the exact pattern that
         caused the Vercel incident. rotate-cli holds no keys between runs, only the plan.
         When you are done rotating, there is nothing for an attacker to steal except your
         own machine.
@@ -293,7 +299,7 @@ const rotations = [
       <h2 class="font-display italic">Read the code before you rotate anything.</h2>
       <p class="mt-6 max-w-2xl mx-auto text-graphite">
         rotate-cli is MIT-licensed. 17 adapters in v0.1. Tested with 136 unit tests but not
-        yet battle-tested against live rotations — we are smoke-testing through April 2026
+        yet battle-tested against live rotations, we are smoke-testing through April 2026
         before cutting npm.
       </p>
       <div class="mt-10 flex flex-wrap items-center justify-center gap-4">

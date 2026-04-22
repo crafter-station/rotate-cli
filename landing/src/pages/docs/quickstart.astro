@@ -74,8 +74,8 @@ Summary: 77 self (58 unique), 280 other (145 unique), 69 unknown, 22 no-check</s
 
   <div class="callout">
     <p>
-      <strong>58 unique</strong> even though 77 <em>entries</em> show as self —
-      duplicate values (e.g. the same <code>CLERK_SECRET_KEY</code> in dev/preview/prod)
+      <strong>58 unique</strong> even though 77 <em>entries</em> show as self.
+      Duplicate values (for example the same <code>CLERK_SECRET_KEY</code> in dev, preview, and prod)
       get deduped automatically during <code>apply</code>. You rotate once,
       every copy updates.
     </p>
@@ -108,7 +108,7 @@ Summary: 77 self (58 unique), 280 other (145 unique), 69 unknown, 22 no-check</s
   <p>
     Dashboard-only providers. rotate-cli opens the URL, you paste the new
     value, propagation + verify happens automatically. <code>--manual-only</code>
-    requires an interactive TTY — agents can&apos;t run this phase.
+    requires an interactive TTY because agents can&apos;t run this phase.
   </p>
   <Terminal>
 <span class="prompt">$</span> rotate-cli apply --from-scan --manual-only \

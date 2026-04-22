@@ -8,7 +8,7 @@ interface Props {
 }
 
 const {
-  title = "rotate-cli — agent-first secrets rotation",
+  title = "rotate-cli, agent-first secrets rotation",
   description = "Local-first secrets rotation CLI. Built for the AI-native stack. Zero servers, agent mode with hard guardrails, incident mode for vendor breaches.",
 } = Astro.props;
 ---
@@ -16,6 +16,21 @@ const {
 <!doctype html>
 <html lang="en">
   <head>
+    <script is:inline>
+      (function () {
+        try {
+          const saved = localStorage.getItem("rotate-cli-theme");
+          const theme =
+            saved ??
+            (window.matchMedia("(prefers-color-scheme: dark)").matches
+              ? "dark"
+              : "light");
+          document.documentElement.setAttribute("data-theme", theme);
+        } catch {
+          document.documentElement.setAttribute("data-theme", "light");
+        }
+      })();
+    </script>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="description" content={description} />

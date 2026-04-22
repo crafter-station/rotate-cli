@@ -1,6 +1,7 @@
 ---
 import "../styles/global.css";
 import Analytics from "@vercel/analytics/astro";
+import ThemeToggle from "../components/ThemeToggle.astro";
 
 interface Props {
   title: string;
@@ -44,6 +45,21 @@ const currentPath = Astro.url.pathname.replace(/\/$/, "") || "/docs";
 <!doctype html>
 <html lang="en">
   <head>
+    <script is:inline>
+      (function () {
+        try {
+          const saved = localStorage.getItem("rotate-cli-theme");
+          const theme =
+            saved ??
+            (window.matchMedia("(prefers-color-scheme: dark)").matches
+              ? "dark"
+              : "light");
+          document.documentElement.setAttribute("data-theme", theme);
+        } catch {
+          document.documentElement.setAttribute("data-theme", "light");
+        }
+      })();
+    </script>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="description" content={description ?? "rotate-cli documentation"} />
@@ -63,7 +79,7 @@ const currentPath = Astro.url.pathname.replace(/\/$/, "") || "/docs";
           <span class="font-display text-xl font-semibold text-ink">rotate-cli</span>
           <span class="label text-xs">docs</span>
         </a>
-        <nav class="flex items-center gap-6 text-sm">
+        <nav class="flex items-center gap-4 text-sm">
           <a href="/" class="no-underline text-graphite hover:text-bronze">Home</a>
           <a
             href="https://github.com/crafter-station/rotate-cli"
@@ -74,6 +90,7 @@ const currentPath = Astro.url.pathname.replace(/\/$/, "") || "/docs";
             </svg>
             GitHub
           </a>
+          <ThemeToggle />
         </nav>
       </div>
     </header>

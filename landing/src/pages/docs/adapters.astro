@@ -1,5 +1,6 @@
 ---
 import Docs from "../../layouts/Docs.astro";
+import LogoThemed from "../../components/LogoThemed.astro";
 import { ClerkLogo } from "../../components/logos/clerk";
 import { OpenAILogo } from "../../components/logos/openai";
 import { AnthropicLogo } from "../../components/logos/anthropic";
@@ -37,6 +38,27 @@ const logoRegistry: Record<string, any> = {
   uploadthing: UploadthingLogo,
   trigger: TriggerLogo,
   firecrawl: FirecrawlLogo,
+};
+
+// Pretty name for the brand shown under the adapter name
+const displayNameByLogo: Record<string, string> = {
+  clerk: "Clerk",
+  openai: "OpenAI",
+  anthropic: "Anthropic",
+  resend: "Resend",
+  supabase: "Supabase",
+  neon: "Neon",
+  vercel: "Vercel",
+  github: "GitHub",
+  upstash: "Upstash",
+  polar: "Polar",
+  turso: "Turso",
+  elevenlabs: "ElevenLabs",
+  fal: "fal",
+  exa: "Exa",
+  uploadthing: "UploadThing",
+  trigger: "Trigger.dev",
+  firecrawl: "Firecrawl",
 };
 
 type Mode = "auto" | "manual-assist" | "no-check";
@@ -79,7 +101,7 @@ const manualAdapters: AdapterRow[] = [
 
 const noCheckAdapters: AdapterRow[] = [
   { name: "vercel-kv", logo: "vercel", provider: "Vercel KV (legacy)", envVars: ["KV_REST_API_URL", "KV_REST_API_TOKEN"], mode: "no-check", strategy: "delegates to upstash" },
-  { name: "local-random", logo: "vercel", provider: "Local random", envVars: ["SESSION_SECRET", "JWT_SECRET", "HMAC_SECRET"], mode: "no-check", strategy: "n/a — generated locally" },
+  { name: "local-random", logo: "vercel", provider: "Local random", envVars: ["SESSION_SECRET", "JWT_SECRET", "HMAC_SECRET"], mode: "no-check", strategy: "n/a, generated locally" },
 ];
 
 const sections: Array<{ heading: string; subtitle: string; rows: AdapterRow[] }> = [
@@ -106,8 +128,8 @@ const sections: Array<{ heading: string; subtitle: string; rows: AdapterRow[] }>
       provider APIs to mint and revoke keys. <code>manual-assist</code>
       adapters pause for the user to paste a new value from the provider
       dashboard (because the provider doesn&apos;t expose a rotation API).
-      <code>no-check</code> adapters skip ownership detection entirely —
-      used for locally-generated secrets or alias adapters.
+      <code>no-check</code> adapters skip ownership detection entirely.
+      Used for locally-generated secrets or alias adapters.
     </p>
   </div>
 
@@ -123,7 +145,10 @@ const sections: Array<{ heading: string; subtitle: string; rows: AdapterRow[] }>
             return (
               <div class="card p-4 flex items-start gap-4">
                 <div class="shrink-0 h-10 w-10 flex items-center justify-center rounded-[2px] bg-parchment p-1.5">
-                  <Logo className="h-full w-auto" />
+                  <LogoThemed class="h-full w-full">
+                    <Logo slot="light" mode="light" className="h-full w-auto" />
+                    <Logo slot="dark" mode="dark" className="h-full w-auto" />
+                  </LogoThemed>
                 </div>
                 <div class="min-w-0 flex-1">
                   <div class="flex items-baseline justify-between gap-3">
@@ -159,11 +184,11 @@ const sections: Array<{ heading: string; subtitle: string; rows: AdapterRow[] }>
     Providers researched but not yet implemented (tier 3, low impact):
   </p>
   <ul>
-    <li><strong>Groq</strong> (<code>GROQ_API_KEY</code>) — inference-only API, no key management</li>
-    <li><strong>Mistral</strong> (<code>MISTRAL_API_KEY</code>) — dashboard-only, no admin API</li>
-    <li><strong>Luma</strong> (<code>LUMA_API_KEY</code>) — dashboard-only, billable endpoints only</li>
-    <li><strong>Kapso</strong> (<code>KAPSO_API_KEY</code>) — internal platform, docs pending</li>
-    <li><strong>Electric SQL</strong> (<code>ELECTRIC_SECRET</code>) — CLI ORPC, future adapter</li>
+    <li><strong>Groq</strong> (<code>GROQ_API_KEY</code>). Inference-only API, no key management.</li>
+    <li><strong>Mistral</strong> (<code>MISTRAL_API_KEY</code>). Dashboard-only, no admin API.</li>
+    <li><strong>Luma</strong> (<code>LUMA_API_KEY</code>). Dashboard-only, billable endpoints only.</li>
+    <li><strong>Kapso</strong> (<code>KAPSO_API_KEY</code>). Internal platform, docs pending.</li>
+    <li><strong>Electric SQL</strong> (<code>ELECTRIC_SECRET</code>). CLI ORPC, future adapter.</li>
   </ul>
   <p>
     Full research reports at <a href="https://github.com/crafter-station/rotate-cli/tree/main/docs/adapter-research/unmapped">docs/adapter-research/unmapped/</a>.

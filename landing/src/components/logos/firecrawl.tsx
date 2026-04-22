@@ -5,7 +5,7 @@ interface FirecrawlLogoProps {
 }
 
 /**
- * Firecrawl placeholder logo — the official logo isn't in the elements
+ * Firecrawl placeholder logo, the official logo isn't in the elements
  * registry yet. This is a simple flame mark using the brand orange.
  * TODO: replace with official mark when @elements/firecrawl-logo lands.
  */

@@ -46,17 +46,17 @@ import Terminal from "../../components/Terminal.astro";
 
   <ol>
     <li>
-      <strong><a href="/docs/scan">scan</a></strong> — enumerate every env var across every Vercel
+      <strong><a href="/docs/scan">scan</a></strong>. Enumerate every env var across every Vercel
       project you can see. Maps each to a rotate-cli adapter.
     </li>
     <li>
-      <strong><a href="/docs/who">who</a></strong> — for each mapped secret, decide
+      <strong><a href="/docs/who">who</a></strong>. For each mapped secret, decide
       whether it belongs to <em>you</em>, to <em>someone else on the team</em>,
-      or can&apos;t be determined. Avoids rotating Cueva&apos;s keys and charging
+      or can&apos;t be determined. Avoids rotating a teammate&apos;s keys and charging
       your billing.
     </li>
     <li>
-      <strong><a href="/docs/apply">apply</a></strong> — rotate, propagate, verify, grace,
+      <strong><a href="/docs/apply">apply</a></strong>. Rotate, propagate, verify, grace,
       revoke. Splits into <code>--auto-only</code> (unattended, fast) and
       <code>--manual-only</code> (interactive for dashboard-only providers).
     </li>
@@ -67,7 +67,7 @@ import Terminal from "../../components/Terminal.astro";
     Every command emits a JSON envelope (or pretty output for humans). In
     agent mode, the CLI refuses any action missing <code>--reason</code>,
     <code>--yes</code>, or <code>--max-rotations</code>. Manual-assist
-    adapters auto-fail in agent mode — agents can&apos;t paste dashboard values.
+    adapters auto-fail in agent mode because agents can&apos;t paste dashboard values.
   </p>
 
   <Terminal title="agent mode">
@@ -80,8 +80,8 @@ import Terminal from "../../components/Terminal.astro";
 
   <h2>Next</h2>
   <ul>
-    <li><a href="/docs/quickstart">Quickstart</a> — 5 minutes, piloto with 2 keys</li>
-    <li><a href="/docs/adapters">Adapters reference</a> — all 22 providers</li>
-    <li><a href="/docs/agent-mode">Agent mode guardrails</a> — what agents can and can&apos;t do</li>
+    <li><a href="/docs/quickstart">Quickstart</a> in 5 minutes with a 2-key pilot</li>
+    <li><a href="/docs/adapters">Adapters reference</a> covering all 22 providers</li>
+    <li><a href="/docs/agent-mode">Agent mode guardrails</a>. What agents can and can&apos;t do.</li>
   </ul>
 </Docs>
