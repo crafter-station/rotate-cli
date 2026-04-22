@@ -89,14 +89,14 @@ const autoAdapters: AdapterRow[] = [
   { name: "fal", logo: "fal", provider: "fal.ai", envVars: ["FAL_API_KEY", "FAL_KEY"], mode: "auto", strategy: "key_id list-match" },
   { name: "elevenlabs", logo: "elevenlabs", provider: "ElevenLabs", envVars: ["ELEVENLABS_API_KEY"], mode: "auto", strategy: "GET /v1/user" },
   { name: "turso", logo: "turso", provider: "Turso", envVars: ["TURSO_AUTH_TOKEN", "TURSO_DATABASE_URL"], mode: "auto", strategy: "URL hostname decode" },
-  { name: "exa", logo: "exa", provider: "Exa", envVars: ["EXA_API_KEY"], mode: "auto", strategy: "Team Management API", notes: "new in v0.2" },
+  { name: "exa", logo: "exa", provider: "Exa", envVars: ["EXA_API_KEY"], mode: "auto", strategy: "Team Management API" },
 ];
 
 const manualAdapters: AdapterRow[] = [
-  { name: "uploadthing", logo: "uploadthing", provider: "UploadThing", envVars: ["UPLOADTHING_TOKEN"], mode: "manual-assist", strategy: "token format-decode", notes: "new in v0.2" },
-  { name: "vercel-blob", logo: "vercel", provider: "Vercel Blob", envVars: ["BLOB_READ_WRITE_TOKEN"], mode: "manual-assist", strategy: "ownership only (no rotation API)", notes: "new in v0.2" },
-  { name: "trigger-dev", logo: "trigger", provider: "Trigger.dev", envVars: ["TRIGGER_SECRET_KEY"], mode: "manual-assist", strategy: "none", notes: "new in v0.2" },
-  { name: "firecrawl", logo: "firecrawl", provider: "Firecrawl", envVars: ["FIRECRAWL_API_KEY"], mode: "manual-assist", strategy: "none", notes: "new in v0.2" },
+  { name: "uploadthing", logo: "uploadthing", provider: "UploadThing", envVars: ["UPLOADTHING_TOKEN"], mode: "manual-assist", strategy: "token format-decode" },
+  { name: "vercel-blob", logo: "vercel", provider: "Vercel Blob", envVars: ["BLOB_READ_WRITE_TOKEN"], mode: "manual-assist", strategy: "ownership only (no rotation API)" },
+  { name: "trigger-dev", logo: "trigger", provider: "Trigger.dev", envVars: ["TRIGGER_SECRET_KEY"], mode: "manual-assist", strategy: "none" },
+  { name: "firecrawl", logo: "firecrawl", provider: "Firecrawl", envVars: ["FIRECRAWL_API_KEY"], mode: "manual-assist", strategy: "none" },
 ];
 
 const noCheckAdapters: AdapterRow[] = [

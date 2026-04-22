@@ -16,6 +16,10 @@ import { PolarLogo } from "../components/logos/polar";
 import { TursoLogo } from "../components/logos/turso";
 import { ElevenlabsLogo } from "../components/logos/elevenlabs";
 import { FalLogo } from "../components/logos/fal";
+import { ExaLogo } from "../components/logos/exa";
+import { UploadthingLogo } from "../components/logos/uploadthing";
+import { TriggerLogo } from "../components/logos/trigger";
+import { FirecrawlLogo } from "../components/logos/firecrawl";
 
 // biome-ignore lint/suspicious/noExplicitAny: logos are all SVG React components with compatible props
 const logoByName: Record<string, any> = {
@@ -32,31 +36,48 @@ const logoByName: Record<string, any> = {
   "vercel-token": VercelLogo,
   "ai-gateway": VercelLogo,
   "vercel-kv": VercelLogo,
+  "vercel-blob": VercelLogo,
   upstash: UpstashLogo,
   polar: PolarLogo,
   turso: TursoLogo,
   elevenlabs: ElevenlabsLogo,
   fal: FalLogo,
+  exa: ExaLogo,
+  uploadthing: UploadthingLogo,
+  "trigger-dev": TriggerLogo,
+  firecrawl: FirecrawlLogo,
 };
 
-const adapters = [
-  { name: "clerk", covers: "CLERK_SECRET_KEY, webhook", tag: "auth" },
-  { name: "openai", covers: "admin keys via /v1/organization", tag: "ai" },
-  { name: "anthropic", covers: "admin API keys", tag: "ai" },
-  { name: "resend", covers: "RESEND_API_KEY", tag: "email" },
-  { name: "supabase", covers: "service role, anon, jwt", tag: "db" },
-  { name: "neon", covers: "project API keys", tag: "db" },
-  { name: "neon-connection", covers: "DATABASE_URL / POSTGRES_*", tag: "db" },
-  { name: "github-token", covers: "installation tokens", tag: "ci" },
-  { name: "vercel-token", covers: "VERCEL_TOKEN", tag: "infra" },
-  { name: "ai-gateway", covers: "AI_GATEWAY_API_KEY", tag: "ai" },
-  { name: "upstash", covers: "Redis / Vector REST tokens", tag: "cache" },
-  { name: "vercel-kv", covers: "legacy KV_* (alias)", tag: "cache" },
-  { name: "polar", covers: "OAT + webhook secrets", tag: "billing" },
-  { name: "fal", covers: "FAL_API_KEY", tag: "ai" },
-  { name: "elevenlabs", covers: "service-account keys", tag: "ai" },
-  { name: "turso", covers: "TURSO_AUTH_TOKEN + DATABASE_URL", tag: "db" },
-  { name: "local-random", covers: "SESSION / JWT / HMAC", tag: "app" },
+type AdapterEntry = {
+  name: string;
+  covers: string;
+  tag: string;
+  mode?: "auto" | "manual-assist" | "no-check";
+};
+
+const adapters: AdapterEntry[] = [
+  { name: "clerk", covers: "CLERK_SECRET_KEY, webhook", tag: "auth", mode: "auto" },
+  { name: "openai", covers: "admin keys via /v1/organization", tag: "ai", mode: "auto" },
+  { name: "anthropic", covers: "admin API keys", tag: "ai", mode: "auto" },
+  { name: "resend", covers: "RESEND_API_KEY", tag: "email", mode: "auto" },
+  { name: "supabase", covers: "service role, anon, jwt", tag: "db", mode: "auto" },
+  { name: "neon", covers: "project API keys", tag: "db", mode: "auto" },
+  { name: "neon-connection", covers: "DATABASE_URL / POSTGRES_*", tag: "db", mode: "auto" },
+  { name: "github-token", covers: "installation tokens", tag: "ci", mode: "auto" },
+  { name: "vercel-token", covers: "VERCEL_TOKEN", tag: "infra", mode: "auto" },
+  { name: "ai-gateway", covers: "AI_GATEWAY_API_KEY", tag: "ai", mode: "auto" },
+  { name: "upstash", covers: "Redis / Vector REST tokens", tag: "cache", mode: "auto" },
+  { name: "polar", covers: "OAT + webhook secrets", tag: "billing", mode: "auto" },
+  { name: "fal", covers: "FAL_API_KEY", tag: "ai", mode: "auto" },
+  { name: "elevenlabs", covers: "service-account keys", tag: "ai", mode: "auto" },
+  { name: "turso", covers: "TURSO_AUTH_TOKEN + DATABASE_URL", tag: "db", mode: "auto" },
+  { name: "exa", covers: "EXA_API_KEY", tag: "ai", mode: "auto" },
+  { name: "uploadthing", covers: "UPLOADTHING_TOKEN", tag: "files", mode: "manual-assist" },
+  { name: "vercel-blob", covers: "BLOB_READ_WRITE_TOKEN", tag: "files", mode: "manual-assist" },
+  { name: "trigger-dev", covers: "TRIGGER_SECRET_KEY", tag: "jobs", mode: "manual-assist" },
+  { name: "firecrawl", covers: "FIRECRAWL_API_KEY", tag: "scrape", mode: "manual-assist" },
+  { name: "vercel-kv", covers: "legacy KV_* (alias)", tag: "cache", mode: "no-check" },
+  { name: "local-random", covers: "SESSION / JWT / HMAC", tag: "app", mode: "no-check" },
 ];
 
 const consumers = [
@@ -82,7 +103,7 @@ const rotations = [
     </div>
     <div class="mx-auto max-w-5xl px-6 pt-20 pb-24 lg:pt-32 lg:pb-32 relative">
       <p class="label text-sm mb-6">
-        v0.1.0 · open source · pre-npm
+        v0.1.0-dev · open source · pre-npm
       </p>
       <h1 class="max-w-3xl">
         Agent-first secrets rotation.
@@ -135,7 +156,7 @@ const rotations = [
 
       <div class="mt-10 grid grid-cols-2 md:grid-cols-4 gap-6">
         <div>
-          <div class="font-display text-4xl text-ink">17</div>
+          <div class="font-display text-4xl text-ink">22</div>
           <div class="label text-xs mt-1">adapters</div>
         </div>
         <div>
@@ -188,13 +209,15 @@ const rotations = [
   <!-- adapters ------------------------------------------------------------->
   <section class="border-b border-ink/10 bg-parchment-cream/30 relative">
     <div class="mx-auto max-w-6xl px-6 py-20">
-      <p class="label mb-4">providers · v0.1</p>
-      <h2>17 adapters. Every one golpea la API publica.</h2>
+      <p class="label mb-4">providers</p>
+      <h2>22 adapters. Every one hits the public API.</h2>
       <p class="mt-4 max-w-2xl text-graphite">
         No SDK bloat. Each adapter is a single file implementing
         <code class="bg-ink/5 px-1 rounded-[2px]">create / verify / revoke</code> against the
-        provider's documented REST surface. Providers without a rotation API land in v0.2
-        via human-in-the-loop adapters.
+        provider's documented REST surface. Dashboard-only providers (Firecrawl,
+        Trigger.dev, Uploadthing, Vercel Blob) use <em>manual-assist</em> mode: the
+        CLI pauses, you paste a new value from the provider UI, and rotate-cli still
+        handles propagation, verification, and grace.
       </p>
 
       <div class="mt-12 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -217,7 +240,15 @@ const rotations = [
                 ) : (
                   <div class="h-7 w-7" />
                 )}
-                <span class="label text-[10px] text-bronze">{a.tag}</span>
+                <div class="flex items-center gap-2">
+                  {a.mode === "manual-assist" && (
+                    <span class="label text-[10px] text-ember" title="Requires interactive dashboard step">manual</span>
+                  )}
+                  {a.mode === "no-check" && (
+                    <span class="label text-[10px] text-graphite-mid" title="No ownership detection">no-check</span>
+                  )}
+                  <span class="label text-[10px] text-bronze">{a.tag}</span>
+                </div>
               </div>
               <h3 class="font-display text-xl text-ink">{a.name}</h3>
               <p class="mt-2 text-sm text-graphite">{a.covers}</p>
@@ -298,9 +329,8 @@ const rotations = [
     <div class="mx-auto max-w-5xl px-6 py-24 text-center">
       <h2 class="font-display italic">Read the code before you rotate anything.</h2>
       <p class="mt-6 max-w-2xl mx-auto text-graphite">
-        rotate-cli is MIT-licensed. 17 adapters in v0.1. Tested with 136 unit tests but not
-        yet battle-tested against live rotations, we are smoke-testing through April 2026
-        before cutting npm.
+        rotate-cli is MIT-licensed. 22 adapters covered. 334 unit tests passing.
+        End-to-end smoke tests against real providers in progress before cutting npm.
       </p>
       <div class="mt-10 flex flex-wrap items-center justify-center gap-4">
         <a
@@ -320,7 +350,7 @@ const rotations = [
   <footer class="border-t border-ink/10 bg-parchment-cream/40">
     <div class="mx-auto max-w-6xl px-6 py-10 flex flex-wrap items-center justify-between gap-4 text-sm text-graphite-mid">
       <p>MIT © {new Date().getFullYear()} Crafter Station</p>
-      <p class="label text-xs">v0.1.0 · pre-release</p>
+      <p class="label text-xs">v0.1.0-dev · pre-release</p>
     </div>
   </footer>
 </Base>
