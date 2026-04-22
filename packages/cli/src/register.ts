@@ -12,7 +12,9 @@ import aiGatewayAdapter from "@rotate/adapter-ai-gateway";
 import anthropicAdapter from "@rotate/adapter-anthropic";
 import clerkAdapter from "@rotate/adapter-clerk";
 import elevenLabsAdapter from "@rotate/adapter-elevenlabs";
+import exaAdapter from "@rotate/adapter-exa";
 import falAdapter from "@rotate/adapter-fal";
+import firecrawlAdapter from "@rotate/adapter-firecrawl";
 import githubTokenAdapter from "@rotate/adapter-github-token";
 import localRandomAdapter from "@rotate/adapter-local-random";
 import neonAdapter from "@rotate/adapter-neon";
@@ -21,8 +23,11 @@ import openaiAdapter from "@rotate/adapter-openai";
 import polarAdapter from "@rotate/adapter-polar";
 import resendAdapter from "@rotate/adapter-resend";
 import supabaseAdapter from "@rotate/adapter-supabase";
+import triggerDevAdapter from "@rotate/adapter-trigger-dev";
 import tursoAdapter from "@rotate/adapter-turso";
+import uploadthingAdapter from "@rotate/adapter-uploadthing";
 import upstashAdapter from "@rotate/adapter-upstash";
+import vercelBlobAdapter from "@rotate/adapter-vercel-blob";
 import vercelKvAdapter from "@rotate/adapter-vercel-kv";
 import vercelTokenAdapter from "@rotate/adapter-vercel-token";
 
@@ -53,6 +58,11 @@ export function registerAll(): void {
   registerAdapter(elevenLabsAdapter);
   registerAdapter(tursoAdapter);
   registerAdapter(localRandomAdapter);
+  registerAdapter(exaAdapter);
+  registerAdapter(uploadthingAdapter);
+  registerAdapter(vercelBlobAdapter);
+  registerAdapter(triggerDevAdapter);
+  registerAdapter(firecrawlAdapter);
 
   registerConsumer(vercelEnvConsumer);
   registerConsumer(githubActionsConsumer);

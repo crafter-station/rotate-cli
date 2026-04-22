@@ -38,8 +38,22 @@
         "@rotate/core": "workspace:*",
       },
     },
+    "packages/adapter-exa": {
+      "name": "@rotate/adapter-exa",
+      "version": "0.0.1",
+      "dependencies": {
+        "@rotate/core": "workspace:*",
+      },
+    },
     "packages/adapter-fal": {
       "name": "@rotate/adapter-fal",
+      "version": "0.0.1",
+      "dependencies": {
+        "@rotate/core": "workspace:*",
+      },
+    },
+    "packages/adapter-firecrawl": {
+      "name": "@rotate/adapter-firecrawl",
       "version": "0.0.1",
       "dependencies": {
         "@rotate/core": "workspace:*",
@@ -115,8 +129,22 @@
         "@rotate/core": "workspace:*",
       },
     },
+    "packages/adapter-uploadthing": {
+      "name": "@rotate/adapter-uploadthing",
+      "version": "0.0.1",
+      "dependencies": {
+        "@rotate/core": "workspace:*",
+      },
+    },
     "packages/adapter-upstash": {
       "name": "@rotate/adapter-upstash",
+      "version": "0.0.1",
+      "dependencies": {
+        "@rotate/core": "workspace:*",
+      },
+    },
+    "packages/adapter-vercel-blob": {
+      "name": "@rotate/adapter-vercel-blob",
       "version": "0.0.1",
       "dependencies": {
         "@rotate/core": "workspace:*",
@@ -141,14 +169,16 @@
       "name": "@rotate/cli",
       "version": "0.0.1",
       "bin": {
-        "rotate": "./src/bin.ts",
+        "rotate-cli": "./src/bin.ts",
       },
       "dependencies": {
         "@rotate/adapter-ai-gateway": "workspace:*",
         "@rotate/adapter-anthropic": "workspace:*",
         "@rotate/adapter-clerk": "workspace:*",
         "@rotate/adapter-elevenlabs": "workspace:*",
+        "@rotate/adapter-exa": "workspace:*",
         "@rotate/adapter-fal": "workspace:*",
+        "@rotate/adapter-firecrawl": "workspace:*",
         "@rotate/adapter-github-token": "workspace:*",
         "@rotate/adapter-local-random": "workspace:*",
         "@rotate/adapter-neon": "workspace:*",
@@ -157,8 +187,11 @@
         "@rotate/adapter-polar": "workspace:*",
         "@rotate/adapter-resend": "workspace:*",
         "@rotate/adapter-supabase": "workspace:*",
+        "@rotate/adapter-trigger-dev": "workspace:*",
         "@rotate/adapter-turso": "workspace:*",
+        "@rotate/adapter-uploadthing": "workspace:*",
         "@rotate/adapter-upstash": "workspace:*",
+        "@rotate/adapter-vercel-blob": "workspace:*",
         "@rotate/adapter-vercel-kv": "workspace:*",
         "@rotate/adapter-vercel-token": "workspace:*",
         "@rotate/consumer-github-actions": "workspace:*",
@@ -240,7 +273,11 @@
 
     "@rotate/adapter-elevenlabs": ["@rotate/adapter-elevenlabs@workspace:packages/adapter-elevenlabs"],
 
+    "@rotate/adapter-exa": ["@rotate/adapter-exa@workspace:packages/adapter-exa"],
+
     "@rotate/adapter-fal": ["@rotate/adapter-fal@workspace:packages/adapter-fal"],
+
+    "@rotate/adapter-firecrawl": ["@rotate/adapter-firecrawl@workspace:packages/adapter-firecrawl"],
 
     "@rotate/adapter-github-token": ["@rotate/adapter-github-token@workspace:packages/adapter-github-token"],
 
@@ -262,7 +299,11 @@
 
     "@rotate/adapter-turso": ["@rotate/adapter-turso@workspace:packages/adapter-turso"],
 
+    "@rotate/adapter-uploadthing": ["@rotate/adapter-uploadthing@workspace:packages/adapter-uploadthing"],
+
     "@rotate/adapter-upstash": ["@rotate/adapter-upstash@workspace:packages/adapter-upstash"],
+
+    "@rotate/adapter-vercel-blob": ["@rotate/adapter-vercel-blob@workspace:packages/adapter-vercel-blob"],
 
     "@rotate/adapter-vercel-kv": ["@rotate/adapter-vercel-kv@workspace:packages/adapter-vercel-kv"],
 

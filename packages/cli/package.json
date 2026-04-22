@@ -32,6 +32,11 @@
     "@rotate/adapter-elevenlabs": "workspace:*",
     "@rotate/adapter-turso": "workspace:*",
     "@rotate/adapter-local-random": "workspace:*",
+    "@rotate/adapter-exa": "workspace:*",
+    "@rotate/adapter-uploadthing": "workspace:*",
+    "@rotate/adapter-vercel-blob": "workspace:*",
+    "@rotate/adapter-trigger-dev": "workspace:*",
+    "@rotate/adapter-firecrawl": "workspace:*",
     "@rotate/consumer-vercel-env": "workspace:*",
     "@rotate/consumer-github-actions": "workspace:*",
     "@rotate/consumer-local-env": "workspace:*"

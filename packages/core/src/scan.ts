@@ -64,7 +64,20 @@ const VAR_TO_ADAPTER: Array<{ match: (name: string) => boolean; adapter: string 
   { match: (n) => n === "GITHUB_TOKEN" || n === "GH_TOKEN", adapter: "github-token" },
   // billing
   { match: (n) => n === "POLAR_ACCESS_TOKEN" || n === "POLAR_WEBHOOK_SECRET", adapter: "polar" },
-  // app secrets — generated locally, no provider
+  // v0.2 tier-1/tier-2 providers (new adapters shipped in v0.2)
+  { match: (n) => n === "EXA_API_KEY", adapter: "exa" },
+  {
+    match: (n) =>
+      n === "UPLOADTHING_TOKEN" || n === "UPLOADTHING_SECRET" || n === "UPLOADTHING_APP_ID",
+    adapter: "uploadthing",
+  },
+  { match: (n) => n === "BLOB_READ_WRITE_TOKEN", adapter: "vercel-blob" },
+  {
+    match: (n) => n === "TRIGGER_SECRET_KEY" || n === "TRIGGER_ACCESS_TOKEN",
+    adapter: "trigger-dev",
+  },
+  { match: (n) => n === "FIRECRAWL_API_KEY", adapter: "firecrawl" },
+  // app secrets, generated locally, no provider
   {
     match: (n) =>
       /^(SESSION_SECRET|JWT_SECRET|HMAC_SECRET|CRON_SECRET|AUTH_SECRET|NEXTAUTH_SECRET)$/.test(n),
