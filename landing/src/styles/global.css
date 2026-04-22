@@ -194,7 +194,8 @@
     background: var(--terminal-bg);
     color: var(--terminal-fg);
     font-family: var(--font-mono);
-    font-size: 0.9375rem;
+    font-size: 13px;
+    line-height: 1.55;
     padding: 1.25rem 1.5rem;
     border-radius: 2px;
     border: 1px solid var(--terminal-border);
