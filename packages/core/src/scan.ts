@@ -19,8 +19,16 @@ const VERCEL_BASE = process.env.VERCEL_API_URL ?? "https://api.vercel.com";
 // most generic. An unmapped var is returned as `adapter: null` so the caller
 // can skip it (not every env var is a rotatable secret — some are config).
 const VAR_TO_ADAPTER: Array<{ match: (name: string) => boolean; adapter: string }> = [
-  // clerk
-  { match: (n) => n === "CLERK_SECRET_KEY" || n === "CLERK_WEBHOOK_SECRET", adapter: "clerk" },
+  // clerk — CLERK_WEBHOOK_SIGNING_SECRET is the canonical Svix name
+  // (the webhook receiver reads this env var via verifyWebhook). Older
+  // codebases use the shorter CLERK_WEBHOOK_SECRET.
+  {
+    match: (n) =>
+      n === "CLERK_SECRET_KEY" ||
+      n === "CLERK_WEBHOOK_SECRET" ||
+      n === "CLERK_WEBHOOK_SIGNING_SECRET",
+    adapter: "clerk",
+  },
   // openai / anthropic / fal / elevenlabs / groq / mistral / ai-gateway
   { match: (n) => n === "OPENAI_API_KEY" || n === "OPENAI_ADMIN_KEY", adapter: "openai" },
   { match: (n) => n === "ANTHROPIC_API_KEY" || n === "ANTHROPIC_ADMIN_KEY", adapter: "anthropic" },
