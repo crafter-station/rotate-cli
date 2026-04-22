@@ -1,6 +1,33 @@
 ---
-import Docs from "../../layouts/Docs.astro";
 import Terminal from "../../components/Terminal.astro";
+import Docs from "../../layouts/Docs.astro";
+
+const terminalLines1 = [
+  `<span class="cmt"># .rotate/incidents/vercel-apr-2026.yaml</span>`,
+  `<span class="str">version</span>: 1`,
+  `<span class="str">id</span>: vercel-apr-2026`,
+  `<span class="str">published</span>: <span class="str">"2026-04-18"</span>`,
+  `<span class="str">reference</span>: <span class="str">"https://vercel.com/blog/apr-2026-oauth-incident"</span>`,
+  `<span class="str">severity</span>: high`,
+  `<span class="str">scope</span>:`,
+  `  - <span class="str">provider</span>: clerk`,
+  `    <span class="str">filter</span>: &#123; <span class="str">tag</span>: non-sensitive &#125;`,
+  `  - <span class="str">provider</span>: resend`,
+  `  - <span class="str">provider</span>: openai`,
+  `    <span class="str">filter</span>: &#123; <span class="str">tag</span>: non-sensitive &#125;`,
+  `  - <span class="str">provider</span>: anthropic`,
+  `  - <span class="str">provider</span>: supabase`,
+  `  ...`,
+];
+
+const terminalLines2 = [
+  `<span class="prompt">$</span> rotate-cli incident .rotate/incidents/vercel-apr-2026.yaml \\`,
+  `    <span class="kw">--yes \\`,
+  `    --reason</span> <span class="str">"context.ai OAuth incident"</span> \\`,
+  `    <span class="kw">--max-rotations</span> 100`,
+];
+
+const terminalLines3 = [`<span class="prompt">$</span> rotate-cli incident &lt;file&gt; --dry-run`];
 ---
 
 <Docs
@@ -21,37 +48,14 @@ import Terminal from "../../components/Terminal.astro";
     by tag or metadata.
   </p>
 
-  <Terminal>
-<span class="cmt"># .rotate/incidents/vercel-apr-2026.yaml</span>
-<span class="str">version</span>: 1
-<span class="str">id</span>: vercel-apr-2026
-<span class="str">published</span>: <span class="str">"2026-04-18"</span>
-<span class="str">reference</span>: <span class="str">"https://vercel.com/blog/apr-2026-oauth-incident"</span>
-<span class="str">severity</span>: high
-<span class="str">scope</span>:
-  - <span class="str">provider</span>: clerk
-    <span class="str">filter</span>: &#123; <span class="str">tag</span>: non-sensitive &#125;
-  - <span class="str">provider</span>: resend
-  - <span class="str">provider</span>: openai
-    <span class="str">filter</span>: &#123; <span class="str">tag</span>: non-sensitive &#125;
-  - <span class="str">provider</span>: anthropic
-  - <span class="str">provider</span>: supabase
-  ...
-  </Terminal>
+  <Terminal lines={terminalLines1} />
 
   <h2>Running an incident</h2>
-  <Terminal>
-<span class="prompt">$</span> rotate-cli incident .rotate/incidents/vercel-apr-2026.yaml \
-    <span class="kw">--yes \
-    --reason</span> <span class="str">"context.ai OAuth incident"</span> \
-    <span class="kw">--max-rotations</span> 100
-  </Terminal>
+  <Terminal lines={terminalLines2} />
 
   <h3>Dry run</h3>
   <p>See the plan without rotating anything:</p>
-  <Terminal>
-<span class="prompt">$</span> rotate-cli incident &lt;file&gt; --dry-run
-  </Terminal>
+  <Terminal lines={terminalLines3} />
 
   <h2>Flags</h2>
   <table>

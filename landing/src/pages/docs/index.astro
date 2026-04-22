@@ -1,6 +1,21 @@
 ---
-import Docs from "../../layouts/Docs.astro";
 import Terminal from "../../components/Terminal.astro";
+import Docs from "../../layouts/Docs.astro";
+
+const installLines = [
+  `<span class="cmt"># Clone + build from source (npm publish pending)</span>`,
+  `<span class="prompt">$</span> <span class="kw">git clone</span> https://github.com/crafter-station/rotate-cli`,
+  `<span class="prompt">$</span> <span class="kw">cd</span> rotate-cli &amp;&amp; <span class="kw">bun install</span>`,
+  `<span class="prompt">$</span> <span class="kw">bun link</span>   <span class="cmt"># exposes \`rotate-cli\` globally</span>`,
+];
+
+const agentLines = [
+  `<span class="prompt">$</span> ROTATE_CLI_AGENT_MODE=1 rotate-cli apply \\`,
+  `    <span class="kw">--from-scan --yes</span> \\`,
+  `    <span class="kw">--reason</span> <span class="str">"vercel-apr-2026 breach response"</span> \\`,
+  `    <span class="kw">--max-rotations</span> 50 \\`,
+  `    <span class="kw">--audit-log</span> ./audit.log`,
+];
 ---
 
 <Docs
@@ -31,12 +46,7 @@ import Terminal from "../../components/Terminal.astro";
   </div>
 
   <h2>Install</h2>
-  <Terminal>
-<span class="cmt"># Clone + build from source (npm publish pending)</span>
-<span class="prompt">$</span> <span class="kw">git clone</span> https://github.com/crafter-station/rotate-cli
-<span class="prompt">$</span> <span class="kw">cd</span> rotate-cli &amp;&amp; <span class="kw">bun install</span>
-<span class="prompt">$</span> <span class="kw">bun link</span>   <span class="cmt"># exposes `rotate-cli` globally</span>
-  </Terminal>
+  <Terminal lines={installLines} />
 
   <h2>Three commands, one flow</h2>
   <p>
@@ -70,13 +80,7 @@ import Terminal from "../../components/Terminal.astro";
     adapters auto-fail in agent mode because agents can&apos;t paste dashboard values.
   </p>
 
-  <Terminal title="agent mode">
-<span class="prompt">$</span> ROTATE_CLI_AGENT_MODE=1 rotate-cli apply \
-    <span class="kw">--from-scan --yes</span> \
-    <span class="kw">--reason</span> <span class="str">"vercel-apr-2026 breach response"</span> \
-    <span class="kw">--max-rotations</span> 50 \
-    <span class="kw">--audit-log</span> ./audit.log
-  </Terminal>
+  <Terminal title="agent mode" lines={agentLines} />
 
   <h2>Next</h2>
   <ul>

@@ -1,6 +1,43 @@
 ---
-import Docs from "../../layouts/Docs.astro";
 import Terminal from "../../components/Terminal.astro";
+import Docs from "../../layouts/Docs.astro";
+
+const terminalLines1 = [
+  `<span class="prompt">$</span> rotate-cli scan [--team &lt;slug&gt;] [--include-public]`,
+];
+
+const terminalLines2 = [
+  `<span class="cmt">Scanning 1 scope(s)...`,
+  `  ✓ crafter-station    318 projects · 462 secrets · 5.1s`,
+  ``,
+  `Total: 318 projects · 462 mapped · 366 unmapped`,
+  ``,
+  `Mapped by adapter:`,
+  `    99  clerk`,
+  `   148  neon-connection`,
+  `    80  upstash`,
+  `    29  vercel-ai-gateway`,
+  `    24  openai`,
+  `    ...`,
+  ``,
+  `Next:`,
+  `  → rotate-cli who --from-scan</span>`,
+];
+
+const terminalLines3 = [
+  `<span class="prompt">$</span> ROTATE_CLI_AGENT_MODE=1 rotate-cli scan`,
+  `<span class="kw">&#123;</span>`,
+  `  <span class="str">"command"</span>: <span class="str">"scan"</span>,`,
+  `  <span class="str">"status"</span>: <span class="str">"success"</span>,`,
+  `  <span class="str">"data"</span>: &#123;`,
+  `    <span class="str">"projects_scanned"</span>: 318,`,
+  `    <span class="str">"total_secrets"</span>: 462,`,
+  `    <span class="str">"by_adapter"</span>: &#123;<span class="str">"clerk"</span>: 99, ... &#125;,`,
+  `    <span class="str">"secrets"</span>: [ ... ],`,
+  `    <span class="str">"skipped"</span>: [&#123; <span class="str">"var_name"</span>: <span class="str">"NODE_ENV"</span>, ... &#125;]`,
+  `  &#125;`,
+  `<span class="kw">&#125;</span>`,
+];
 ---
 
 <Docs
@@ -24,9 +61,7 @@ import Terminal from "../../components/Terminal.astro";
   </p>
 
   <h2>Usage</h2>
-  <Terminal>
-<span class="prompt">$</span> rotate-cli scan [--team &lt;slug&gt;] [--include-public]
-  </Terminal>
+  <Terminal lines={terminalLines1} />
 
   <h3>Flags</h3>
   <table>
@@ -52,39 +87,10 @@ import Terminal from "../../components/Terminal.astro";
   <p>Cached at <code>~/.config/rotate-cli/last-scan.json</code>. Readable by <code>who --from-scan</code> and <code>apply --from-scan</code> without re-hitting Vercel.</p>
 
   <h3>Pretty</h3>
-  <Terminal>
-<span class="cmt">Scanning 1 scope(s)...
-  ✓ crafter-station    318 projects · 462 secrets · 5.1s
-
-Total: 318 projects · 462 mapped · 366 unmapped
-
-Mapped by adapter:
-    99  clerk
-   148  neon-connection
-    80  upstash
-    29  vercel-ai-gateway
-    24  openai
-    ...
-
-Next:
-  → rotate-cli who --from-scan</span>
-  </Terminal>
+  <Terminal lines={terminalLines2} />
 
   <h3>JSON (agent mode)</h3>
-  <Terminal>
-<span class="prompt">$</span> ROTATE_CLI_AGENT_MODE=1 rotate-cli scan
-<span class="kw">&#123;</span>
-  <span class="str">"command"</span>: <span class="str">"scan"</span>,
-  <span class="str">"status"</span>: <span class="str">"success"</span>,
-  <span class="str">"data"</span>: &#123;
-    <span class="str">"projects_scanned"</span>: 318,
-    <span class="str">"total_secrets"</span>: 462,
-    <span class="str">"by_adapter"</span>: &#123;<span class="str">"clerk"</span>: 99, ... &#125;,
-    <span class="str">"secrets"</span>: [ ... ],
-    <span class="str">"skipped"</span>: [&#123; <span class="str">"var_name"</span>: <span class="str">"NODE_ENV"</span>, ... &#125;]
-  &#125;
-<span class="kw">&#125;</span>
-  </Terminal>
+  <Terminal lines={terminalLines3} />
 
   <h2>Authentication</h2>
   <p>

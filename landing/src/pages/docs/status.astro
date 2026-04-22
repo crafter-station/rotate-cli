@@ -1,6 +1,40 @@
 ---
-import Docs from "../../layouts/Docs.astro";
 import Terminal from "../../components/Terminal.astro";
+import Docs from "../../layouts/Docs.astro";
+
+const terminalLines1 = [
+  `<span class="prompt">$</span> rotate-cli status`,
+  ``,
+  `<span class="cmt">rotate-cli status`,
+  ``,
+  `3 rotation(s) in flight`,
+  ``,
+  `  ● rot_mo9kfx2a  in_grace  clerk-elements`,
+  `      grace ends 2026-04-22 16:30 UTC`,
+  `  ● rot_mo9kfy3b  in_grace  resend-railly`,
+  `      grace ends 2026-04-22 16:30 UTC`,
+  `  ● rot_mo9kfz4c  failed    supabase-kebo-api`,
+  ``,
+  `Next:`,
+  `  → rotate-cli revoke &lt;rotation-id&gt;  when consumers are synced</span>`,
+];
+
+const terminalLines2 = [`<span class="prompt">$</span> rotate-cli status rot_mo9kfx2a --json`];
+
+const terminalLines3 = [
+  `<span class="prompt">$</span> rotate-cli revoke rot_mo9kfx2a`,
+  ``,
+  `<span class="cmt">rotate-cli revoke`,
+  ``,
+  `  ✓ rot_mo9kfx2a closed`,
+  `      old secret invalidated; grace period ended</span>`,
+];
+
+const terminalLines4 = [
+  `<span class="cmt"># ./audit.log</span>`,
+  `<span class="kw">&#123;</span><span class="str">"timestamp"</span>:<span class="str">"..."</span>,<span class="str">"rotation_id"</span>:<span class="str">"rot_mo9kfx2a"</span>,<span class="str">"secret_id"</span>:<span class="str">"clerk-elements"</span>,<span class="str">"adapter"</span>:<span class="str">"clerk"</span>,<span class="str">"status"</span>:<span class="str">"in_grace"</span>,<span class="str">"agent_mode"</span>:false,...<span class="kw">&#125;</span>`,
+  `<span class="kw">&#123;</span><span class="str">"timestamp"</span>:<span class="str">"..."</span>,<span class="str">"rotation_id"</span>:<span class="str">"rot_mo9kfx2a"</span>,<span class="str">"status"</span>:<span class="str">"revoked"</span>,...<span class="kw">&#125;</span>`,
+];
 ---
 
 <Docs
@@ -13,27 +47,10 @@ import Terminal from "../../components/Terminal.astro";
   <h2><code>rotate-cli status</code> (alias <code>ps</code>)</h2>
   <p>List rotations currently in flight or in grace. Pass a rotation-id for details.</p>
 
-  <Terminal>
-<span class="prompt">$</span> rotate-cli status
-
-<span class="cmt">rotate-cli status
-
-3 rotation(s) in flight
-
-  ● rot_mo9kfx2a  in_grace  clerk-elements
-      grace ends 2026-04-22 16:30 UTC
-  ● rot_mo9kfy3b  in_grace  resend-railly
-      grace ends 2026-04-22 16:30 UTC
-  ● rot_mo9kfz4c  failed    supabase-kebo-api
-
-Next:
-  → rotate-cli revoke &lt;rotation-id&gt;  when consumers are synced</span>
-  </Terminal>
+  <Terminal lines={terminalLines1} />
 
   <h3>Inspect one rotation</h3>
-  <Terminal>
-<span class="prompt">$</span> rotate-cli status rot_mo9kfx2a --json
-  </Terminal>
+  <Terminal lines={terminalLines2} />
 
   <h2><code>rotate-cli revoke &lt;rotation-id&gt;</code></h2>
   <p>
@@ -50,23 +67,12 @@ Next:
     </tbody>
   </table>
 
-  <Terminal>
-<span class="prompt">$</span> rotate-cli revoke rot_mo9kfx2a
-
-<span class="cmt">rotate-cli revoke
-
-  ✓ rot_mo9kfx2a closed
-      old secret invalidated; grace period ended</span>
-  </Terminal>
+  <Terminal lines={terminalLines3} />
 
   <h2>Audit trail</h2>
   <p>
     Every create, propagate, trigger, verify, and revoke step appends
     a JSON line to the audit log:
   </p>
-  <Terminal>
-<span class="cmt"># ./audit.log</span>
-<span class="kw">&#123;</span><span class="str">"timestamp"</span>:<span class="str">"..."</span>,<span class="str">"rotation_id"</span>:<span class="str">"rot_mo9kfx2a"</span>,<span class="str">"secret_id"</span>:<span class="str">"clerk-elements"</span>,<span class="str">"adapter"</span>:<span class="str">"clerk"</span>,<span class="str">"status"</span>:<span class="str">"in_grace"</span>,<span class="str">"agent_mode"</span>:false,...<span class="kw">&#125;</span>
-<span class="kw">&#123;</span><span class="str">"timestamp"</span>:<span class="str">"..."</span>,<span class="str">"rotation_id"</span>:<span class="str">"rot_mo9kfx2a"</span>,<span class="str">"status"</span>:<span class="str">"revoked"</span>,...<span class="kw">&#125;</span>
-  </Terminal>
+  <Terminal lines={terminalLines4} />
 </Docs>

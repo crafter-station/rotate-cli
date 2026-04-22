@@ -1,6 +1,42 @@
 ---
-import Docs from "../../layouts/Docs.astro";
 import Terminal from "../../components/Terminal.astro";
+import Docs from "../../layouts/Docs.astro";
+
+const terminalLines1 = [
+  `<span class="prompt">$</span> rotate-cli apply --from-scan --tag non-sensitive \\`,
+  `    <span class="kw">--yes --confirm-bulk \\`,
+  `    --reason</span> <span class="str">"vercel-apr-2026 breach"</span>`,
+  ``,
+  `<span class="cmt">Fetching siblings... ✓ 14.3s`,
+  `Grouping 76 entries... 58 unique, 18 deferred to manual phase`,
+  ``,
+  `[1/58] ✓ clerk-elements                 rotated · 2.1s`,
+  `[2/58] ✓ vercel-ai-gateway-latex0        rotated · 0.8s`,
+  `...`,
+  `[58/58] ✓ resend-railly                  rotated · 1.4s`,
+  ``,
+  `✓ 58 rotations in grace (1h)`,
+  `⚠ 18 rotation(s) deferred to the other phase:`,
+  `  firecrawl (10), trigger-dev (5), uploadthing (3)`,
+  `  → rotate-cli apply --from-scan --manual-only</span>`,
+];
+
+const terminalLines2 = [
+  `<span class="kw">&#123;</span>`,
+  `  <span class="str">"command"</span>: <span class="str">"apply"</span>,`,
+  `  <span class="str">"status"</span>: <span class="str">"success"</span>,`,
+  `  <span class="str">"data"</span>: &#123;`,
+  `    <span class="str">"mode"</span>: <span class="str">"auto-only"</span>,`,
+  `    <span class="str">"rotations"</span>: [&#123; <span class="str">"rotation_id"</span>: <span class="str">"rot_123"</span>, <span class="str">"status"</span>: <span class="str">"in_grace"</span>, ... &#125;],`,
+  `    <span class="str">"deferred"</span>: [&#123; <span class="str">"secret_id"</span>: <span class="str">"firecrawl-visionboard"</span>, <span class="str">"adapter"</span>: <span class="str">"firecrawl"</span> &#125;],`,
+  `    <span class="str">"ownership_summary"</span>: &#123; <span class="str">"self"</span>: 58, <span class="str">"other"</span>: 0, ... &#125;`,
+  `  &#125;,`,
+  `  <span class="str">"next_actions"</span>: [`,
+  `    <span class="str">"Run \`rotate status rot_123 --json\` to check sync; \`rotate revoke rot_123\` when ready"</span>,`,
+  `    <span class="str">"18 rotation(s) deferred to the other phase: firecrawl (10), ..., run \`rotate-cli apply --manual-only\`"</span>`,
+  `  ]`,
+  `<span class="kw">&#125;</span>`,
+];
 ---
 
 <Docs
@@ -82,40 +118,8 @@ import Terminal from "../../components/Terminal.astro";
   </ol>
 
   <h2>Example: bulk incident response</h2>
-  <Terminal>
-<span class="prompt">$</span> rotate-cli apply --from-scan --tag non-sensitive \
-    <span class="kw">--yes --confirm-bulk \
-    --reason</span> <span class="str">"vercel-apr-2026 breach"</span>
-
-<span class="cmt">Fetching siblings... ✓ 14.3s
-Grouping 76 entries... 58 unique, 18 deferred to manual phase
-
-[1/58] ✓ clerk-elements                 rotated · 2.1s
-[2/58] ✓ vercel-ai-gateway-latex0        rotated · 0.8s
-...
-[58/58] ✓ resend-railly                  rotated · 1.4s
-
-✓ 58 rotations in grace (1h)
-⚠ 18 rotation(s) deferred to the other phase:
-  firecrawl (10), trigger-dev (5), uploadthing (3)
-  → rotate-cli apply --from-scan --manual-only</span>
-  </Terminal>
+  <Terminal lines={terminalLines1} />
 
   <h2>JSON envelope</h2>
-  <Terminal>
-<span class="kw">&#123;</span>
-  <span class="str">"command"</span>: <span class="str">"apply"</span>,
-  <span class="str">"status"</span>: <span class="str">"success"</span>,
-  <span class="str">"data"</span>: &#123;
-    <span class="str">"mode"</span>: <span class="str">"auto-only"</span>,
-    <span class="str">"rotations"</span>: [&#123; <span class="str">"rotation_id"</span>: <span class="str">"rot_123"</span>, <span class="str">"status"</span>: <span class="str">"in_grace"</span>, ... &#125;],
-    <span class="str">"deferred"</span>: [&#123; <span class="str">"secret_id"</span>: <span class="str">"firecrawl-visionboard"</span>, <span class="str">"adapter"</span>: <span class="str">"firecrawl"</span> &#125;],
-    <span class="str">"ownership_summary"</span>: &#123; <span class="str">"self"</span>: 58, <span class="str">"other"</span>: 0, ... &#125;
-  &#125;,
-  <span class="str">"next_actions"</span>: [
-    <span class="str">"Run `rotate status rot_123 --json` to check sync; `rotate revoke rot_123` when ready"</span>,
-    <span class="str">"18 rotation(s) deferred to the other phase: firecrawl (10), ..., run `rotate-cli apply --manual-only`"</span>
-  ]
-<span class="kw">&#125;</span>
-  </Terminal>
+  <Terminal lines={terminalLines2} />
 </Docs>

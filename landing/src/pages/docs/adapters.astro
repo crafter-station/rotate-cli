@@ -1,23 +1,23 @@
 ---
-import Docs from "../../layouts/Docs.astro";
 import LogoThemed from "../../components/LogoThemed.astro";
-import { ClerkLogo } from "../../components/logos/clerk";
-import { OpenAILogo } from "../../components/logos/openai";
 import { AnthropicLogo } from "../../components/logos/anthropic";
+import { ClerkLogo } from "../../components/logos/clerk";
+import { ElevenlabsLogo } from "../../components/logos/elevenlabs";
+import { ExaLogo } from "../../components/logos/exa";
+import { FalLogo } from "../../components/logos/fal";
+import { FirecrawlLogo } from "../../components/logos/firecrawl";
+import { GithubLogo } from "../../components/logos/github";
+import { NeonLogo } from "../../components/logos/neon";
+import { OpenAILogo } from "../../components/logos/openai";
+import { PolarLogo } from "../../components/logos/polar";
 import { ResendLogo } from "../../components/logos/resend";
 import { SupabaseLogo } from "../../components/logos/supabase";
-import { NeonLogo } from "../../components/logos/neon";
-import { VercelLogo } from "../../components/logos/vercel";
-import { GithubLogo } from "../../components/logos/github";
-import { UpstashLogo } from "../../components/logos/upstash";
-import { PolarLogo } from "../../components/logos/polar";
-import { TursoLogo } from "../../components/logos/turso";
-import { ElevenlabsLogo } from "../../components/logos/elevenlabs";
-import { FalLogo } from "../../components/logos/fal";
-import { ExaLogo } from "../../components/logos/exa";
-import { UploadthingLogo } from "../../components/logos/uploadthing";
 import { TriggerLogo } from "../../components/logos/trigger";
-import { FirecrawlLogo } from "../../components/logos/firecrawl";
+import { TursoLogo } from "../../components/logos/turso";
+import { UploadthingLogo } from "../../components/logos/uploadthing";
+import { UpstashLogo } from "../../components/logos/upstash";
+import { VercelLogo } from "../../components/logos/vercel";
+import Docs from "../../layouts/Docs.astro";
 
 // Type-safe lookup by logo key
 const logoRegistry: Record<string, any> = {
@@ -64,50 +64,216 @@ const displayNameByLogo: Record<string, string> = {
 type Mode = "auto" | "manual-assist" | "no-check";
 
 interface AdapterRow {
-  name: string;          // rotate-cli adapter name
+  name: string; // rotate-cli adapter name
   logo: keyof typeof logoRegistry;
   provider: string;
   envVars: string[];
   mode: Mode;
-  strategy: string;      // ownership detection strategy summary
+  strategy: string; // ownership detection strategy summary
   notes?: string;
 }
 
 const autoAdapters: AdapterRow[] = [
-  { name: "clerk", logo: "clerk", provider: "Clerk", envVars: ["CLERK_SECRET_KEY", "CLERK_WEBHOOK_SIGNING_SECRET"], mode: "auto", strategy: "format-decode + PLAPI JWKS" },
-  { name: "openai", logo: "openai", provider: "OpenAI", envVars: ["OPENAI_API_KEY", "OPENAI_ADMIN_KEY"], mode: "auto", strategy: "api-introspection /v1/me" },
-  { name: "anthropic", logo: "anthropic", provider: "Anthropic", envVars: ["ANTHROPIC_API_KEY", "ANTHROPIC_ADMIN_KEY"], mode: "auto", strategy: "list-match admin API keys" },
-  { name: "resend", logo: "resend", provider: "Resend", envVars: ["RESEND_API_KEY"], mode: "auto", strategy: "domain list-match" },
-  { name: "supabase", logo: "supabase", provider: "Supabase", envVars: ["SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_ANON_KEY", "SUPABASE_JWT_SECRET"], mode: "auto", strategy: "JWT decode + project ref" },
-  { name: "neon", logo: "neon", provider: "Neon (API key)", envVars: ["NEON_API_KEY"], mode: "auto", strategy: "GET /users/me" },
-  { name: "neon-connection", logo: "neon", provider: "Neon (DB)", envVars: ["DATABASE_URL", "POSTGRES_URL", "DATABASE_URL_UNPOOLED"], mode: "auto", strategy: "endpoint id reverse-index" },
-  { name: "vercel-token", logo: "vercel", provider: "Vercel token", envVars: ["VERCEL_TOKEN"], mode: "auto", strategy: "GET /v5/user/tokens/current" },
-  { name: "vercel-ai-gateway", logo: "vercel", provider: "Vercel AI Gateway", envVars: ["AI_GATEWAY_API_KEY"], mode: "auto", strategy: "prefix + liveness probe" },
-  { name: "github-token", logo: "github", provider: "GitHub token", envVars: ["GITHUB_TOKEN"], mode: "auto", strategy: "prefix-routed /user or /installation" },
-  { name: "upstash", logo: "upstash", provider: "Upstash Redis/Vector", envVars: ["UPSTASH_REDIS_REST_URL", "UPSTASH_REDIS_REST_TOKEN"], mode: "auto", strategy: "sha256 token hash + endpoint" },
-  { name: "polar", logo: "polar", provider: "Polar", envVars: ["POLAR_ACCESS_TOKEN", "POLAR_WEBHOOK_SECRET"], mode: "auto", strategy: "GET /v1/organizations + hash" },
-  { name: "fal", logo: "fal", provider: "fal.ai", envVars: ["FAL_API_KEY", "FAL_KEY"], mode: "auto", strategy: "key_id list-match" },
-  { name: "elevenlabs", logo: "elevenlabs", provider: "ElevenLabs", envVars: ["ELEVENLABS_API_KEY"], mode: "auto", strategy: "GET /v1/user" },
-  { name: "turso", logo: "turso", provider: "Turso", envVars: ["TURSO_AUTH_TOKEN", "TURSO_DATABASE_URL"], mode: "auto", strategy: "URL hostname decode" },
-  { name: "exa", logo: "exa", provider: "Exa", envVars: ["EXA_API_KEY"], mode: "auto", strategy: "Team Management API" },
+  {
+    name: "clerk",
+    logo: "clerk",
+    provider: "Clerk",
+    envVars: ["CLERK_SECRET_KEY", "CLERK_WEBHOOK_SIGNING_SECRET"],
+    mode: "auto",
+    strategy: "format-decode + PLAPI JWKS",
+  },
+  {
+    name: "openai",
+    logo: "openai",
+    provider: "OpenAI",
+    envVars: ["OPENAI_API_KEY", "OPENAI_ADMIN_KEY"],
+    mode: "auto",
+    strategy: "api-introspection /v1/me",
+  },
+  {
+    name: "anthropic",
+    logo: "anthropic",
+    provider: "Anthropic",
+    envVars: ["ANTHROPIC_API_KEY", "ANTHROPIC_ADMIN_KEY"],
+    mode: "auto",
+    strategy: "list-match admin API keys",
+  },
+  {
+    name: "resend",
+    logo: "resend",
+    provider: "Resend",
+    envVars: ["RESEND_API_KEY"],
+    mode: "auto",
+    strategy: "domain list-match",
+  },
+  {
+    name: "supabase",
+    logo: "supabase",
+    provider: "Supabase",
+    envVars: ["SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_ANON_KEY", "SUPABASE_JWT_SECRET"],
+    mode: "auto",
+    strategy: "JWT decode + project ref",
+  },
+  {
+    name: "neon",
+    logo: "neon",
+    provider: "Neon (API key)",
+    envVars: ["NEON_API_KEY"],
+    mode: "auto",
+    strategy: "GET /users/me",
+  },
+  {
+    name: "neon-connection",
+    logo: "neon",
+    provider: "Neon (DB)",
+    envVars: ["DATABASE_URL", "POSTGRES_URL", "DATABASE_URL_UNPOOLED"],
+    mode: "auto",
+    strategy: "endpoint id reverse-index",
+  },
+  {
+    name: "vercel-token",
+    logo: "vercel",
+    provider: "Vercel token",
+    envVars: ["VERCEL_TOKEN"],
+    mode: "auto",
+    strategy: "GET /v5/user/tokens/current",
+  },
+  {
+    name: "vercel-ai-gateway",
+    logo: "vercel",
+    provider: "Vercel AI Gateway",
+    envVars: ["AI_GATEWAY_API_KEY"],
+    mode: "auto",
+    strategy: "prefix + liveness probe",
+  },
+  {
+    name: "github-token",
+    logo: "github",
+    provider: "GitHub token",
+    envVars: ["GITHUB_TOKEN"],
+    mode: "auto",
+    strategy: "prefix-routed /user or /installation",
+  },
+  {
+    name: "upstash",
+    logo: "upstash",
+    provider: "Upstash Redis/Vector",
+    envVars: ["UPSTASH_REDIS_REST_URL", "UPSTASH_REDIS_REST_TOKEN"],
+    mode: "auto",
+    strategy: "sha256 token hash + endpoint",
+  },
+  {
+    name: "polar",
+    logo: "polar",
+    provider: "Polar",
+    envVars: ["POLAR_ACCESS_TOKEN", "POLAR_WEBHOOK_SECRET"],
+    mode: "auto",
+    strategy: "GET /v1/organizations + hash",
+  },
+  {
+    name: "fal",
+    logo: "fal",
+    provider: "fal.ai",
+    envVars: ["FAL_API_KEY", "FAL_KEY"],
+    mode: "auto",
+    strategy: "key_id list-match",
+  },
+  {
+    name: "elevenlabs",
+    logo: "elevenlabs",
+    provider: "ElevenLabs",
+    envVars: ["ELEVENLABS_API_KEY"],
+    mode: "auto",
+    strategy: "GET /v1/user",
+  },
+  {
+    name: "turso",
+    logo: "turso",
+    provider: "Turso",
+    envVars: ["TURSO_AUTH_TOKEN", "TURSO_DATABASE_URL"],
+    mode: "auto",
+    strategy: "URL hostname decode",
+  },
+  {
+    name: "exa",
+    logo: "exa",
+    provider: "Exa",
+    envVars: ["EXA_API_KEY"],
+    mode: "auto",
+    strategy: "Team Management API",
+  },
 ];
 
 const manualAdapters: AdapterRow[] = [
-  { name: "uploadthing", logo: "uploadthing", provider: "UploadThing", envVars: ["UPLOADTHING_TOKEN"], mode: "manual-assist", strategy: "token format-decode" },
-  { name: "vercel-blob", logo: "vercel", provider: "Vercel Blob", envVars: ["BLOB_READ_WRITE_TOKEN"], mode: "manual-assist", strategy: "ownership only (no rotation API)" },
-  { name: "trigger-dev", logo: "trigger", provider: "Trigger.dev", envVars: ["TRIGGER_SECRET_KEY"], mode: "manual-assist", strategy: "none" },
-  { name: "firecrawl", logo: "firecrawl", provider: "Firecrawl", envVars: ["FIRECRAWL_API_KEY"], mode: "manual-assist", strategy: "none" },
+  {
+    name: "uploadthing",
+    logo: "uploadthing",
+    provider: "UploadThing",
+    envVars: ["UPLOADTHING_TOKEN"],
+    mode: "manual-assist",
+    strategy: "token format-decode",
+  },
+  {
+    name: "vercel-blob",
+    logo: "vercel",
+    provider: "Vercel Blob",
+    envVars: ["BLOB_READ_WRITE_TOKEN"],
+    mode: "manual-assist",
+    strategy: "ownership only (no rotation API)",
+  },
+  {
+    name: "trigger-dev",
+    logo: "trigger",
+    provider: "Trigger.dev",
+    envVars: ["TRIGGER_SECRET_KEY"],
+    mode: "manual-assist",
+    strategy: "none",
+  },
+  {
+    name: "firecrawl",
+    logo: "firecrawl",
+    provider: "Firecrawl",
+    envVars: ["FIRECRAWL_API_KEY"],
+    mode: "manual-assist",
+    strategy: "none",
+  },
 ];
 
 const noCheckAdapters: AdapterRow[] = [
-  { name: "vercel-kv", logo: "vercel", provider: "Vercel KV (legacy)", envVars: ["KV_REST_API_URL", "KV_REST_API_TOKEN"], mode: "no-check", strategy: "delegates to upstash" },
-  { name: "local-random", logo: "vercel", provider: "Local random", envVars: ["SESSION_SECRET", "JWT_SECRET", "HMAC_SECRET"], mode: "no-check", strategy: "n/a, generated locally" },
+  {
+    name: "vercel-kv",
+    logo: "vercel",
+    provider: "Vercel KV (legacy)",
+    envVars: ["KV_REST_API_URL", "KV_REST_API_TOKEN"],
+    mode: "no-check",
+    strategy: "delegates to upstash",
+  },
+  {
+    name: "local-random",
+    logo: "vercel",
+    provider: "Local random",
+    envVars: ["SESSION_SECRET", "JWT_SECRET", "HMAC_SECRET"],
+    mode: "no-check",
+    strategy: "n/a, generated locally",
+  },
 ];
 
 const sections: Array<{ heading: string; subtitle: string; rows: AdapterRow[] }> = [
-  { heading: "Auto adapters", subtitle: "Rotate unattended. Safe in CI and agent mode.", rows: autoAdapters },
-  { heading: "Manual-assist adapters", subtitle: "Require interactive TTY. Run with `apply --manual-only`.", rows: manualAdapters },
-  { heading: "No-check adapters", subtitle: "No ownership detection. Treat as self by default.", rows: noCheckAdapters },
+  {
+    heading: "Auto adapters",
+    subtitle: "Rotate unattended. Safe in CI and agent mode.",
+    rows: autoAdapters,
+  },
+  {
+    heading: "Manual-assist adapters",
+    subtitle: "Require interactive TTY. Run with `apply --manual-only`.",
+    rows: manualAdapters,
+  },
+  {
+    heading: "No-check adapters",
+    subtitle: "No ownership detection. Treat as self by default.",
+    rows: noCheckAdapters,
+  },
 ];
 ---
 

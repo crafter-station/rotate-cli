@@ -1,6 +1,44 @@
 ---
-import Docs from "../../layouts/Docs.astro";
 import Terminal from "../../components/Terminal.astro";
+import Docs from "../../layouts/Docs.astro";
+
+const terminalLines1 = [`<span class="prompt">$</span> rotate-cli who [selector...] [flags]`];
+
+const terminalLines2 = [
+  `<span class="prompt">$</span> rotate-cli who --from-scan --tag non-sensitive`,
+  ``,
+  `<span class="cmt">Preloading ownership indexes...`,
+  `  ✓ clerk             · 865ms`,
+  `  ✓ upstash           · 1.2s`,
+  `  ✓ neon-connection   · 3.0s`,
+  `  ✓ vercel-siblings   · 98/126 projects decrypted · 14.3s`,
+  ``,
+  `Checking 451 secret(s)...`,
+  ``,
+  `  ✓ clerk-elements-CLERK_SECRET_KEY      self      [clerk] decoded FAPI host matches known host`,
+  `  ✗ upstash-onpe-bot-UPSTASH_REDIS_REST_URL other  [upstash] endpoint not in admin's index`,
+  `  ? openai-semantik-OPENAI_API_KEY       unknown   [openai] /v1/me no org info`,
+  ``,
+  `Summary: 77 self (58 unique), 280 other (145 unique), 69 unknown, 22 no-check</span>`,
+];
+
+const terminalLines3 = [
+  `<span class="kw">&#123;</span>`,
+  `  <span class="str">"command"</span>: <span class="str">"preview-ownership"</span>,`,
+  `  <span class="str">"data"</span>: &#123;`,
+  `    <span class="str">"checks"</span>: [&#123;`,
+  `      <span class="str">"secret_id"</span>: <span class="str">"clerk-elements-CLERK_SECRET_KEY"</span>,`,
+  `      <span class="str">"verdict"</span>: <span class="str">"self"</span>,`,
+  `      <span class="str">"confidence"</span>: <span class="str">"high"</span>,`,
+  `      <span class="str">"strategy"</span>: <span class="str">"format-decode"</span>,`,
+  `      <span class="str">"value_hash"</span>: <span class="str">"a1b2c3d4e5f6"</span>,`,
+  `      <span class="str">"evidence"</span>: <span class="str">"decoded FAPI host matches..."</span>`,
+  `    &#125;],`,
+  `    <span class="str">"summary"</span>: &#123; <span class="str">"self"</span>: 77, <span class="str">"other"</span>: 280, ... &#125;,`,
+  `    <span class="str">"unique_counts"</span>: &#123; <span class="str">"self"</span>: 58, <span class="str">"other"</span>: 145 &#125;`,
+  `  &#125;`,
+  `<span class="kw">&#125;</span>`,
+];
 ---
 
 <Docs
@@ -24,9 +62,7 @@ import Terminal from "../../components/Terminal.astro";
   </p>
 
   <h2>Usage</h2>
-  <Terminal>
-<span class="prompt">$</span> rotate-cli who [selector...] [flags]
-  </Terminal>
+  <Terminal lines={terminalLines1} />
 
   <h3>Selecting secrets</h3>
   <table>
@@ -94,23 +130,7 @@ import Terminal from "../../components/Terminal.astro";
   </table>
 
   <h2>Output</h2>
-  <Terminal>
-<span class="prompt">$</span> rotate-cli who --from-scan --tag non-sensitive
-
-<span class="cmt">Preloading ownership indexes...
-  ✓ clerk             · 865ms
-  ✓ upstash           · 1.2s
-  ✓ neon-connection   · 3.0s
-  ✓ vercel-siblings   · 98/126 projects decrypted · 14.3s
-
-Checking 451 secret(s)...
-
-  ✓ clerk-elements-CLERK_SECRET_KEY      self      [clerk] decoded FAPI host matches known host
-  ✗ upstash-onpe-bot-UPSTASH_REDIS_REST_URL other  [upstash] endpoint not in admin's index
-  ? openai-semantik-OPENAI_API_KEY       unknown   [openai] /v1/me no org info
-
-Summary: 77 self (58 unique), 280 other (145 unique), 69 unknown, 22 no-check</span>
-  </Terminal>
+  <Terminal lines={terminalLines2} />
 
   <p>
     The <code>(N unique)</code> tells you how many actual rotations
@@ -119,21 +139,5 @@ Summary: 77 self (58 unique), 280 other (145 unique), 69 unknown, 22 no-check</s
   </p>
 
   <h2>JSON envelope</h2>
-  <Terminal>
-<span class="kw">&#123;</span>
-  <span class="str">"command"</span>: <span class="str">"preview-ownership"</span>,
-  <span class="str">"data"</span>: &#123;
-    <span class="str">"checks"</span>: [&#123;
-      <span class="str">"secret_id"</span>: <span class="str">"clerk-elements-CLERK_SECRET_KEY"</span>,
-      <span class="str">"verdict"</span>: <span class="str">"self"</span>,
-      <span class="str">"confidence"</span>: <span class="str">"high"</span>,
-      <span class="str">"strategy"</span>: <span class="str">"format-decode"</span>,
-      <span class="str">"value_hash"</span>: <span class="str">"a1b2c3d4e5f6"</span>,
-      <span class="str">"evidence"</span>: <span class="str">"decoded FAPI host matches..."</span>
-    &#125;],
-    <span class="str">"summary"</span>: &#123; <span class="str">"self"</span>: 77, <span class="str">"other"</span>: 280, ... &#125;,
-    <span class="str">"unique_counts"</span>: &#123; <span class="str">"self"</span>: 58, <span class="str">"other"</span>: 145 &#125;
-  &#125;
-<span class="kw">&#125;</span>
-  </Terminal>
+  <Terminal lines={terminalLines3} />
 </Docs>

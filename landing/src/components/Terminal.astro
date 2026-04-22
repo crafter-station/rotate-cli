@@ -1,8 +1,21 @@
 ---
+/**
+ * Terminal code block. Accepts either:
+ *   - a `lines` array of pre-formatted HTML strings (one per line)
+ *   - raw HTML via the slot (legacy, whitespace-fragile)
+ *
+ * Prefer `lines` because Astro collapses whitespace inside <pre><slot /></pre>
+ * when the slot content is JSX-like (mixed text + elements), breaking
+ * multi-line code blocks at build time.
+ */
+
 interface Props {
   title?: string;
+  lines?: string[];
 }
-const { title } = Astro.props;
+
+const { title, lines } = Astro.props;
+const joined = lines?.join("\n");
 ---
 
 <div class="terminal relative">
@@ -13,5 +26,11 @@ const { title } = Astro.props;
       </div>
     )
   }
-  <pre class="m-0"><slot /></pre>
+  {
+    joined !== undefined ? (
+      <pre class="m-0" set:html={joined} />
+    ) : (
+      <pre class="m-0"><slot /></pre>
+    )
+  }
 </div>
