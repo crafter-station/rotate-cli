@@ -241,10 +241,25 @@ export const upstashAdapter: Adapter = {
       if (looksLikeUpstashRestToken(secretValue)) {
         const endpoint = preload.tokenHashToEndpoint?.[sha256(secretValue)];
         if (!endpoint) {
-          return unknownOwnership(
-            "REST token did not match the authenticated admin's Upstash Redis index",
-            "medium",
-          );
+          // Preload ran without error but this token isn't indexed. Two
+          // possible explanations:
+          //   a) the admin has DBs but this token is for one they don't own
+          //   b) the admin has 0 DBs and every upstash token belongs to
+          //      someone else
+          // Both point to "other". Medium confidence keeps the door open
+          // for the edge case where a legit token's hash drifted (e.g. db
+          // was deleted and the token is stale in Vercel).
+          const indexSize = Object.keys(preload.tokenHashToEndpoint ?? {}).length;
+          return {
+            verdict: "other",
+            adminCanBill: false,
+            confidence: "medium",
+            evidence:
+              indexSize > 0
+                ? `REST token did not match any of the ${indexSize} Upstash Redis tokens visible to the authenticated admin — likely owned by another account`
+                : `authenticated admin has 0 Upstash Redis DBs, so this REST token belongs to another account`,
+            strategy: "list-match",
+          };
         }
         const db = preload.dbByEndpoint?.[endpoint];
         if (!db) {
