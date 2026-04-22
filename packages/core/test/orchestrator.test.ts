@@ -426,4 +426,46 @@ describe("orchestrator.applyRotation ownership gate", () => {
     expect(envelopeStatus).toBe("skipped");
     expect(rotation.skipReason?.kind).toBe("ownership-current-value-unavailable");
   });
+
+  test("manual-assist adapter in agent-mode → unsupported error", async () => {
+    const adapter = makeMockAdapter();
+    (adapter as unknown as { mode: string }).mode = "manual-assist";
+    registerAdapter(adapter);
+    registerConsumer(makeMockConsumer("mock-consumer"));
+
+    const { envelopeStatus, rotation } = await applyRotation(
+      {
+        id: "primary",
+        adapter: "mock-provider",
+        metadata: {},
+        consumers: [{ type: "mock-consumer", params: { project: "p", var_name: "K" } }],
+      },
+      { agentMode: true },
+    );
+
+    expect(envelopeStatus).toBe("error");
+    expect(rotation.errors[0]?.code).toBe("unsupported");
+    expect(rotation.errors[0]?.message).toContain("manual-assist");
+  });
+
+  test("manual-assist adapter without interactive IO → unsupported error", async () => {
+    const adapter = makeMockAdapter();
+    (adapter as unknown as { mode: string }).mode = "manual-assist";
+    registerAdapter(adapter);
+    registerConsumer(makeMockConsumer("mock-consumer"));
+
+    const { envelopeStatus, rotation } = await applyRotation(
+      {
+        id: "primary",
+        adapter: "mock-provider",
+        metadata: {},
+        consumers: [{ type: "mock-consumer", params: { project: "p", var_name: "K" } }],
+      },
+      {}, // no io
+    );
+
+    expect(envelopeStatus).toBe("error");
+    expect(rotation.errors[0]?.code).toBe("unsupported");
+    expect(rotation.errors[0]?.message).toContain("interactive terminal");
+  });
 });

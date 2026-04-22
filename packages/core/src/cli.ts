@@ -463,6 +463,14 @@ export async function runCli(argv: string[]): Promise<void> {
       "--confirm-bulk",
       "required when --from-scan selects more than 20 rotations (safety guard)",
     )
+    .option(
+      "--auto-only",
+      "rotate only auto-mode adapters; list manual-assist adapters as pending (default for --from-scan)",
+    )
+    .option(
+      "--manual-only",
+      "rotate only manual-assist adapters; pauses for dashboard steps (requires TTY)",
+    )
     .action(
       async (
         idsArg: string[] | undefined,
@@ -479,6 +487,8 @@ export async function runCli(argv: string[]): Promise<void> {
           scanMaxAge?: string;
           fresh?: boolean;
           confirmBulk?: boolean;
+          autoOnly?: boolean;
+          manualOnly?: boolean;
         },
       ) => {
         const ids = idsArg ?? [];
@@ -495,7 +505,32 @@ export async function runCli(argv: string[]): Promise<void> {
           noOwnershipCheck,
           forceRotateOther: opts.forceRotateOther,
         });
-        const selected = opts.fromScan
+        if (opts.autoOnly && opts.manualOnly) {
+          emit(
+            makeEnvelope({
+              command: "apply",
+              status: "error",
+              startedAt: started,
+              agentMode: isAgentMode(),
+              errors: [
+                {
+                  code: "invalid_spec",
+                  message: "--auto-only and --manual-only are mutually exclusive",
+                  provider: "rotate-cli",
+                  retryable: false,
+                },
+              ],
+            }),
+            EXIT.USER_ERROR,
+          );
+          return;
+        }
+        // Default mode policy: agent-mode always = auto-only (never prompt).
+        // Interactive default = auto-only too (safe unattended run) unless
+        // the user explicitly asks for --manual-only.
+        const manualOnly = Boolean(opts.manualOnly);
+        const autoOnly = manualOnly ? false : Boolean(opts.autoOnly) || !opts.manualOnly;
+        const allSelected = opts.fromScan
           ? await loadFromScan({
               ids,
               provider: opts.provider,
@@ -507,6 +542,20 @@ export async function runCli(argv: string[]): Promise<void> {
               const config = loadConfig(globalOpts.config);
               return selectByQuery(config, { ids, provider: opts.provider, tag: opts.tag });
             })();
+
+        // Partition by adapter.mode. The apply loop only consumes entries
+        // matching the chosen phase; the other set is reported as pending.
+        const autoEntries: typeof allSelected = [];
+        const manualEntries: typeof allSelected = [];
+        for (const s of allSelected) {
+          const adapter = getAdapter(s.adapter);
+          const mode = adapter?.mode ?? "auto";
+          if (mode === "manual-assist") manualEntries.push(s);
+          else autoEntries.push(s);
+        }
+        const selected = manualOnly ? manualEntries : autoEntries;
+        const deferred = manualOnly ? autoEntries : manualEntries;
+
         assertMaxRotations(selected.length, opts.maxRotations);
         if (opts.fromScan && selected.length > 20 && !opts.confirmBulk) {
           emit(
@@ -550,6 +599,9 @@ export async function runCli(argv: string[]): Promise<void> {
         }
         const applyPretty = shouldRenderPretty(program);
         const applyProgress = applyPretty ? createApplyProgressRenderer() : null;
+        // Manual-assist adapters need a real interactive PromptIO. Auto-only
+        // adapters get `undefined` — the orchestrator rejects misuse.
+        const applyIO = manualOnly ? createPromptIO() : undefined;
 
         // Pre-fetch project siblings so resolveCurrentValue can read
         // coLocatedVars without N extra Vercel round-trips. Same pattern as
@@ -659,6 +711,7 @@ export async function runCli(argv: string[]): Promise<void> {
             skipUnknown: opts.skipUnknown,
             forceRotateOther: opts.forceRotateOther,
             noOwnershipCheck,
+            io: applyIO,
           });
           results.push(r);
           applyProgress?.handle({
@@ -685,12 +738,30 @@ export async function runCli(argv: string[]): Promise<void> {
             : anyPartial || anySkipped
               ? "partial"
               : "success";
+        await applyIO?.close();
         const nextActions = results
           .filter((r) => r.rotation.status === "in_grace")
           .map(
             (r) =>
               `Run \`rotate status ${r.rotation.id} --json\` to check sync; \`rotate revoke ${r.rotation.id}\` when ready`,
           );
+        // Report entries deferred to the other phase so the user knows
+        // what's still pending. e.g. after --auto-only finishes, tell them
+        // to run --manual-only for the manual-assist adapters.
+        if (deferred.length > 0) {
+          const byAdapter = new Map<string, number>();
+          for (const s of deferred) byAdapter.set(s.adapter, (byAdapter.get(s.adapter) ?? 0) + 1);
+          const breakdown = [...byAdapter.entries()]
+            .map(([a, n]) => `${a} (${n})`)
+            .sort()
+            .join(", ");
+          const nextCmd = manualOnly
+            ? "rotate-cli apply --from-scan --auto-only"
+            : "rotate-cli apply --from-scan --manual-only";
+          nextActions.push(
+            `${deferred.length} rotation(s) deferred to the other phase: ${breakdown} — run \`${nextCmd}\` when ready`,
+          );
+        }
         const skippedResults = results.filter((r) => r.envelopeStatus === "skipped");
         const skipped = skippedResults.map((r) => ({
           secret_id: r.rotation.secretId,
@@ -734,6 +805,11 @@ export async function runCli(argv: string[]): Promise<void> {
               rotations: successfulRotations,
               skipped,
               ownership_summary: ownershipSummary,
+              mode: manualOnly ? "manual-only" : "auto-only",
+              deferred: deferred.map((s) => ({
+                secret_id: s.id,
+                adapter: s.adapter,
+              })),
             },
             next_actions: [...nextActions, ...skipActions],
           }),

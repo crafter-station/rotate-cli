@@ -127,6 +127,13 @@ export interface RotationSpec {
   adapter: string;
   metadata: Record<string, string>;
   reason?: string;
+  /**
+   * Interactive prompt handle. Only provided when the adapter is
+   * `mode: "manual-assist"` AND the CLI is running interactively.
+   * Auto-only adapters must NOT depend on this. If missing, manual-assist
+   * adapters should return an "unsupported" error (agent-mode / CI).
+   */
+  io?: PromptIO;
 }
 
 export interface RotationResult<T = Secret> {
@@ -156,10 +163,20 @@ export interface Adapter {
   readonly name: string;
   readonly authRef?: string;
   readonly authDefinition?: AuthDefinition;
+  /**
+   * Rotation mode:
+   *   - "auto" (default): create/revoke call provider APIs. Runs unattended.
+   *   - "manual-assist": create/revoke pause with interactive prompts asking
+   *     the user to perform steps in the provider dashboard, then paste the
+   *     new value. Incompatible with agent-mode and CI.
+   *
+   * The apply command splits execution into two phases based on this field.
+   */
+  readonly mode?: "auto" | "manual-assist";
   auth(): Promise<AuthContext>;
   create(spec: RotationSpec, ctx: AuthContext): Promise<RotationResult<Secret>>;
   verify(secret: Secret, ctx: AuthContext): Promise<RotationResult<boolean>>;
-  revoke(secret: Secret, ctx: AuthContext): Promise<RotationResult<void>>;
+  revoke(secret: Secret, ctx: AuthContext, opts?: { io?: PromptIO }): Promise<RotationResult<void>>;
   list?(filter: Record<string, string>, ctx: AuthContext): Promise<RotationResult<Secret[]>>;
 
   /**

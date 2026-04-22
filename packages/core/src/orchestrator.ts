@@ -7,6 +7,7 @@ import type {
   ConsumerState,
   ConsumerTargetConfig,
   OwnershipPreload,
+  PromptIO,
   Rotation,
   Secret,
   SecretConfig,
@@ -31,6 +32,10 @@ export interface ApplyOptions {
   skipUnknown?: boolean;
   forceRotateOther?: boolean;
   noOwnershipCheck?: boolean;
+  /** Interactive prompt handle for manual-assist adapters. When the adapter
+   *  is mode="manual-assist" this MUST be present and interactive; the
+   *  orchestrator rejects the rotation otherwise. */
+  io?: PromptIO;
 }
 
 export interface ApplyResult {
@@ -124,6 +129,39 @@ export async function applyRotation(
     }
   }
 
+  // Manual-assist gate: adapter requires interactive input, can't run
+  // unattended. Reject early with a clear error instead of hanging in the
+  // provider SDK.
+  const mode = adapter.mode ?? "auto";
+  if (mode === "manual-assist") {
+    if (opts.agentMode) {
+      rotation.status = "failed";
+      rotation.errors.push(
+        makeError(
+          "unsupported",
+          `adapter ${secret.adapter} is manual-assist and cannot run in agent mode`,
+          secret.adapter,
+          { retryable: false },
+        ),
+      );
+      audit(opts.auditLog, rotation);
+      return { rotation, envelopeStatus: "error" };
+    }
+    if (!opts.io?.isInteractive) {
+      rotation.status = "failed";
+      rotation.errors.push(
+        makeError(
+          "unsupported",
+          `adapter ${secret.adapter} requires an interactive terminal — re-run with --manual-only from a TTY`,
+          secret.adapter,
+          { retryable: false },
+        ),
+      );
+      audit(opts.auditLog, rotation);
+      return { rotation, envelopeStatus: "error" };
+    }
+  }
+
   // Step 1: Create.
   const createResult = await adapter.create(
     {
@@ -131,6 +169,7 @@ export async function applyRotation(
       adapter: secret.adapter,
       metadata: secret.metadata ?? {},
       reason: opts.reason,
+      io: mode === "manual-assist" ? opts.io : undefined,
     },
     authCtx,
   );
@@ -328,7 +367,13 @@ function audit(path: string | undefined, rotation: Rotation): void {
 /** Revoke the OLD secret for a rotation in grace. */
 export async function revokeRotation(
   rotation: Rotation,
-  opts: { force?: boolean; agentMode?: boolean; reason?: string; auditLog?: string } = {},
+  opts: {
+    force?: boolean;
+    agentMode?: boolean;
+    reason?: string;
+    auditLog?: string;
+    io?: PromptIO;
+  } = {},
 ): Promise<{ ok: boolean; errors: AdapterError[] }> {
   if (rotation.status !== "in_grace") {
     return {
@@ -352,8 +397,39 @@ export async function revokeRotation(
       errors: [makeError("invalid_spec", "no old secret or adapter", "rotate-cli")],
     };
   }
+  const mode = adapter.mode ?? "auto";
+  if (mode === "manual-assist") {
+    if (opts.agentMode) {
+      return {
+        ok: false,
+        errors: [
+          makeError(
+            "unsupported",
+            `adapter ${rotation.adapter} is manual-assist and cannot revoke in agent mode`,
+            rotation.adapter,
+            { retryable: false },
+          ),
+        ],
+      };
+    }
+    if (!opts.io?.isInteractive) {
+      return {
+        ok: false,
+        errors: [
+          makeError(
+            "unsupported",
+            `adapter ${rotation.adapter} requires an interactive terminal to revoke`,
+            rotation.adapter,
+            { retryable: false },
+          ),
+        ],
+      };
+    }
+  }
   const ctx = await adapter.auth();
-  const result = await adapter.revoke(rotation.oldSecret, ctx);
+  const result = await adapter.revoke(rotation.oldSecret, ctx, {
+    io: mode === "manual-assist" ? opts.io : undefined,
+  });
   if (!result.ok) return { ok: false, errors: [result.error!] };
   rotation.status = "revoked";
   audit(opts.auditLog, rotation);
