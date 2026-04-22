@@ -91,6 +91,7 @@ export function renderPreviewOwnership(
   checks: OwnershipCheck[],
   summary: OwnershipSummary,
   preloadErrors: Record<string, string>,
+  uniqueCounts?: { self: number; other: number },
 ): void {
   print(pc.bold("rotate-cli preview-ownership"));
   print("");
@@ -121,8 +122,20 @@ export function renderPreviewOwnership(
 
   print("");
   const parts: string[] = [];
-  if (summary.self > 0) parts.push(`${pc.green(String(summary.self))} self`);
-  if (summary.other > 0) parts.push(`${pc.red(String(summary.other))} other`);
+  if (summary.self > 0) {
+    const suffix =
+      uniqueCounts && uniqueCounts.self > 0 && uniqueCounts.self < summary.self
+        ? pc.dim(` (${uniqueCounts.self} unique)`)
+        : "";
+    parts.push(`${pc.green(String(summary.self))} self${suffix}`);
+  }
+  if (summary.other > 0) {
+    const suffix =
+      uniqueCounts && uniqueCounts.other > 0 && uniqueCounts.other < summary.other
+        ? pc.dim(` (${uniqueCounts.other} unique)`)
+        : "";
+    parts.push(`${pc.red(String(summary.other))} other${suffix}`);
+  }
   if (summary.unknown > 0) parts.push(`${pc.yellow(String(summary.unknown))} unknown`);
   if (summary.not_checked > 0) parts.push(`${pc.dim(String(summary.not_checked))} no-check`);
   print(`Summary: ${parts.join(", ")}`);

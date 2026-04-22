@@ -18,7 +18,7 @@ import {
   saveCheckpoint,
 } from "./checkpoints.ts";
 import { loadConfig, loadIncident, selectByIncident, selectByQuery } from "./config.ts";
-import { resolveCurrentValue } from "./current-value.ts";
+import { hashSecretValue, resolveCurrentValue } from "./current-value.ts";
 import { emit, makeEnvelope } from "./envelope.ts";
 import { EXIT, RotateError } from "./errors.ts";
 import { applyRotation, preloadOwnershipForSecrets, revokeRotation } from "./orchestrator.ts";
@@ -550,33 +550,112 @@ export async function runCli(argv: string[]): Promise<void> {
         }
         const applyPretty = shouldRenderPretty(program);
         const applyProgress = applyPretty ? createApplyProgressRenderer() : null;
+
+        // Pre-fetch project siblings so resolveCurrentValue can read
+        // coLocatedVars without N extra Vercel round-trips. Same pattern as
+        // the who command. Only activates when we're consuming the scan
+        // cache (--from-scan) AND have a Vercel token.
+        const applyProjectVars = new Map<string, Record<string, string>>();
+        if (opts.fromScan && !noOwnershipCheck) {
+          const token = resolveVercelTokenForScan();
+          if (token) {
+            const projectEntries: Array<{ key: string; teamId?: string }> = [];
+            const seenProjects = new Set<string>();
+            for (const s of selected) {
+              for (const c of s.consumers) {
+                if (c.type === "vercel-env" && c.params.project) {
+                  const k = `${c.params.team ?? ""}:${c.params.project}`;
+                  if (!seenProjects.has(k)) {
+                    seenProjects.add(k);
+                    projectEntries.push({ key: c.params.project, teamId: c.params.team });
+                  }
+                }
+              }
+            }
+            if (projectEntries.length > 0) {
+              const siblings = await fetchProjectSiblings({ token, projects: projectEntries });
+              for (const [k, v] of siblings) applyProjectVars.set(k, v);
+            }
+          }
+        }
+
         const { map: preloadMap } = noOwnershipCheck
           ? { map: new Map() }
           : await preloadOwnershipForSecrets(selected);
-        applyProgress?.handle({ kind: "start", total: selected.length });
+
+        // Resolve current value for each entry and group by (adapter, value_hash).
+        // Each group rotates ONCE; the representative's consumers[] is the
+        // union of every entry in the group, so propagate reaches every
+        // Vercel project/env/repo that held the duplicated secret.
+        type Group = {
+          representative: (typeof selected)[number];
+          members: Array<(typeof selected)[number]>;
+          currentValue?: string;
+          coLocatedVars?: Record<string, string>;
+        };
+        const groups = new Map<string, Group>();
+        for (const secret of selected) {
+          const projectKey = secret.consumers.find((c) => c.type === "vercel-env")?.params.project;
+          const preFetchedVars = projectKey ? applyProjectVars.get(projectKey) : undefined;
+          const { value: currentValue } = noOwnershipCheck
+            ? { value: null }
+            : await resolveCurrentValue(secret, { preFetchedVars });
+          // Fallback when value can't be resolved: each such entry goes into
+          // its own group keyed by secret.id, preserving 1-per-entry semantics.
+          const key = currentValue
+            ? `${secret.adapter}:${hashSecretValue(currentValue)}`
+            : `unresolved:${secret.id}`;
+          const existing = groups.get(key);
+          if (existing) {
+            existing.members.push(secret);
+          } else {
+            groups.set(key, {
+              representative: secret,
+              members: [secret],
+              currentValue: currentValue ?? undefined,
+              coLocatedVars: preFetchedVars,
+            });
+          }
+        }
+
+        const groupList = [...groups.values()];
+        applyProgress?.handle({ kind: "start", total: groupList.length });
         const results = [];
-        for (let i = 0; i < selected.length; i++) {
-          const secret = selected[i]!;
+        for (let i = 0; i < groupList.length; i++) {
+          const group = groupList[i]!;
           const index = i + 1;
+          const mergedConsumers = [
+            ...new Map(
+              group.members.flatMap((m) =>
+                m.consumers.map((c) => [`${c.type}:${JSON.stringify(c.params)}`, c]),
+              ),
+            ).values(),
+          ];
+          const mergedSecret = {
+            ...group.representative,
+            consumers: mergedConsumers,
+          };
+          const label =
+            group.members.length > 1
+              ? `${group.representative.id} (+${group.members.length - 1} duplicate${group.members.length > 2 ? "s" : ""})`
+              : group.representative.id;
           applyProgress?.handle({
             kind: "rotation-start",
             index,
-            total: selected.length,
-            secretId: secret.id,
-            adapter: secret.adapter,
+            total: groupList.length,
+            secretId: label,
+            adapter: group.representative.adapter,
           });
           const rotationStarted = Date.now();
-          const { value: currentValue } = noOwnershipCheck
-            ? { value: null }
-            : await resolveCurrentValue(secret);
-          const r = await applyRotation(secret, {
+          const r = await applyRotation(mergedSecret, {
             reason: globalOpts.reason,
             agentMode: isAgentMode(),
             auditLog: globalOpts.auditLog,
             parallel: opts.parallel,
             skipVerify: opts.verify === false,
-            currentValue: currentValue ?? undefined,
-            ownershipPreload: preloadMap.get(secret.adapter),
+            currentValue: group.currentValue,
+            ownershipPreload: preloadMap.get(group.representative.adapter),
+            coLocatedVars: group.coLocatedVars,
             skipUnknown: opts.skipUnknown,
             forceRotateOther: opts.forceRotateOther,
             noOwnershipCheck,
@@ -585,8 +664,8 @@ export async function runCli(argv: string[]): Promise<void> {
           applyProgress?.handle({
             kind: "rotation-done",
             index,
-            total: selected.length,
-            secretId: secret.id,
+            total: groupList.length,
+            secretId: label,
             status: r.envelopeStatus,
             rotationId: r.rotation.id,
             durationMs: Date.now() - rotationStarted,
@@ -825,6 +904,10 @@ export async function runCli(argv: string[]): Promise<void> {
           strategy?: string;
           evidence?: string;
           reason?: string;
+          /** sha256 prefix of the underlying value — used to dedup entries
+           *  that point to the same secret across projects/envs. Omitted
+           *  when the value couldn't be resolved. */
+          value_hash?: string;
         }> = new Array(selected.length);
         async function worker(): Promise<void> {
           while (queue.length > 0) {
@@ -878,6 +961,7 @@ export async function runCli(argv: string[]): Promise<void> {
                     confidence: ownership.confidence,
                     strategy: ownership.strategy,
                     evidence: ownership.evidence,
+                    value_hash: hashSecretValue(currentValue),
                   };
                   if (ownership.verdict === "self") counters.self++;
                   else if (ownership.verdict === "other") counters.other++;
@@ -922,10 +1006,30 @@ export async function runCli(argv: string[]): Promise<void> {
           { self: 0, other: 0, unknown: 0, not_checked: 0 },
         );
 
+        // Count unique underlying values per verdict. Two Vercel entries
+        // holding the same secret hash to the same key, so summary.self=77
+        // but only ~57 actual rotations to perform. This metric tells the
+        // user what rotate-cli apply will actually do.
+        const uniqueHashesByVerdict = { self: new Set<string>(), other: new Set<string>() };
+        for (const c of checks) {
+          if (!c.value_hash) continue;
+          if (c.verdict === "self") uniqueHashesByVerdict.self.add(`${c.adapter}:${c.value_hash}`);
+          else if (c.verdict === "other")
+            uniqueHashesByVerdict.other.add(`${c.adapter}:${c.value_hash}`);
+        }
+        const uniqueCounts = {
+          self: uniqueHashesByVerdict.self.size,
+          other: uniqueHashesByVerdict.other.size,
+        };
+
         const nextActions = [];
         if (summary.self > 0) {
+          const rotationsNote =
+            uniqueCounts.self > 0 && uniqueCounts.self < summary.self
+              ? ` (${uniqueCounts.self} unique key${uniqueCounts.self === 1 ? "" : "s"} — rotate-cli apply deduplicates automatically)`
+              : "";
           nextActions.push(
-            `${summary.self} secret(s) ready to rotate — run \`rotate apply\` with matching selector`,
+            `${summary.self} secret(s) ready to rotate${rotationsNote} — run \`rotate apply\` with matching selector`,
           );
         }
         if (summary.other > 0) {
@@ -946,7 +1050,7 @@ export async function runCli(argv: string[]): Promise<void> {
 
         const preloadErrorsObj = Object.fromEntries(preloadErrors);
         if (pretty) {
-          renderPreviewOwnership(checks, summary, preloadErrorsObj);
+          renderPreviewOwnership(checks, summary, preloadErrorsObj, uniqueCounts);
           process.exit(EXIT.OK);
         }
         emit(
@@ -959,6 +1063,7 @@ export async function runCli(argv: string[]): Promise<void> {
               total: checks.length,
               checks,
               summary,
+              unique_counts: uniqueCounts,
               preload_errors: preloadErrorsObj,
             },
             next_actions: nextActions,

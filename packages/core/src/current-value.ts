@@ -13,10 +13,21 @@
  * whether to skip the rotation or proceed.
  */
 
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { join } from "node:path";
 import type { SecretConfig } from "./types.ts";
+
+/**
+ * Short, stable fingerprint of a secret value for dedup across Vercel
+ * projects/environments. Never log the full sha256 — the 12-char prefix
+ * is collision-resistant enough for per-run grouping (birthday-paradox
+ * requires ~2^24 values = 16M secrets before one collision is expected).
+ */
+export function hashSecretValue(value: string): string {
+  return createHash("sha256").update(value).digest("hex").slice(0, 12);
+}
 
 export type CurrentValueSource = "env" | "literal" | "vercel-api" | "unavailable" | "error";
 
