@@ -1,0 +1,86 @@
+---
+import Base from "../layouts/Base.astro";
+import KingMark from "../components/KingMark.astro";
+import ThemeToggle from "../components/ThemeToggle.astro";
+---
+
+<Base title="404 · rotate-cli" description="Page not found">
+  <section class="relative overflow-hidden min-h-[85vh] flex items-center">
+    <div
+      class="pointer-events-none absolute top-0 right-0 -translate-y-8 translate-x-12 opacity-[0.08] text-ink lg:opacity-[0.12]"
+    >
+      <KingMark />
+    </div>
+
+    <div class="mx-auto max-w-4xl px-6 py-20 relative w-full">
+      <div class="absolute top-8 right-6">
+        <ThemeToggle />
+      </div>
+
+      <p class="label text-sm mb-6">error · 404</p>
+
+      <h1 class="max-w-3xl">
+        The secret you are looking for
+        <span class="block text-bronze italic font-normal mt-2">does not exist here.</span>
+      </h1>
+
+      <p class="mt-8 max-w-2xl text-lg text-graphite">
+        Either the page was never published, or the URL got rotated out of the manuscript.
+        The page you asked for is not in our index.
+      </p>
+
+      <div class="mt-12 card p-6 max-w-2xl">
+        <p class="label mb-3">try one of these</p>
+        <ul class="space-y-2 text-sm">
+          <li>
+            <a href="/" class="no-underline hover:underline">
+              <code class="text-bronze">/</code> &nbsp; home
+            </a>
+          </li>
+          <li>
+            <a href="/docs" class="no-underline hover:underline">
+              <code class="text-bronze">/docs</code> &nbsp; intro + install
+            </a>
+          </li>
+          <li>
+            <a href="/docs/quickstart" class="no-underline hover:underline">
+              <code class="text-bronze">/docs/quickstart</code> &nbsp; 5-minute walkthrough
+            </a>
+          </li>
+          <li>
+            <a href="/docs/adapters" class="no-underline hover:underline">
+              <code class="text-bronze">/docs/adapters</code> &nbsp; all 22 providers
+            </a>
+          </li>
+          <li>
+            <a href="/docs/agent-mode" class="no-underline hover:underline">
+              <code class="text-bronze">/docs/agent-mode</code> &nbsp; guardrails for LLM callers
+            </a>
+          </li>
+          <li>
+            <a href="/docs/incident" class="no-underline hover:underline">
+              <code class="text-bronze">/docs/incident</code> &nbsp; incident mode
+            </a>
+          </li>
+        </ul>
+      </div>
+
+      <div class="mt-10 flex flex-wrap items-center gap-4">
+        <a
+          href="/"
+          class="inline-flex items-center gap-2 bg-ink text-parchment px-5 py-3 rounded-[2px] no-underline hover:shadow-lg transition-shadow font-medium"
+        >
+          ← Back home
+        </a>
+        <a
+          href="https://github.com/crafter-station/rotate-cli/issues/new"
+          class="text-ink hover:text-bronze no-underline px-3"
+        >
+          Report a bad link →
+        </a>
+      </div>
+
+      <p class="hand mt-10 text-xl">the king is on another page</p>
+    </div>
+  </section>
+</Base>
