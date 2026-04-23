@@ -4,6 +4,7 @@ import type {
   Adapter,
   AuthContext,
   OwnershipOptions,
+  OwnershipPreload,
   OwnershipResult,
   RotationResult,
   RotationSpec,
@@ -11,27 +12,44 @@ import type {
 } from "@rotate/core/types";
 import { openaiAuthDefinition, verifyOpenAIAuth } from "./auth.ts";
 
+const OPENAI_API_BASE = process.env.OPENAI_API_BASE ?? "https://api.openai.com/v1";
+// Kept for back-compat with the old env override, but no longer used by
+// create/revoke/list — those endpoints only rotate admin keys, not the
+// project keys we discover via scan (sk-proj-*).
 const OPENAI_ADMIN_KEYS_BASE =
-  process.env.OPENAI_ADMIN_KEYS_URL ?? "https://api.openai.com/v1/organization/admin_api_keys";
-const OPENAI_ME_URL = process.env.OPENAI_ME_URL ?? "https://api.openai.com/v1/me";
+  process.env.OPENAI_ADMIN_KEYS_URL ?? `${OPENAI_API_BASE}/organization/admin_api_keys`;
+const OPENAI_ME_URL = process.env.OPENAI_ME_URL ?? `${OPENAI_API_BASE}/me`;
 
-interface OpenAIAdminApiKey {
+interface OpenAIProject {
   id: string;
-  name: string;
+  name?: string;
+  status?: string;
+}
+
+interface OpenAIProjectListResponse {
+  data?: OpenAIProject[];
+  has_more?: boolean;
+  last_id?: string;
+}
+
+interface OpenAIProjectApiKey {
+  id: string;
+  name?: string;
   redacted_value?: string;
   value?: string;
   created_at: number;
   last_used_at?: number | null;
   owner?: {
-    id?: string;
-    name?: string;
-    role?: string;
     type?: string;
+    user?: { id?: string; name?: string; email?: string; role?: string };
+    service_account?: { id?: string; name?: string; role?: string };
   };
 }
 
-interface OpenAIListResponse {
-  data?: OpenAIAdminApiKey[];
+interface OpenAIProjectApiKeyListResponse {
+  data?: OpenAIProjectApiKey[];
+  has_more?: boolean;
+  last_id?: string;
 }
 
 interface OpenAIMeResponse {
@@ -59,16 +77,108 @@ export const openaiAdapter: Adapter = {
     return resolveRegisteredAuth("openai");
   },
 
+  /**
+   * Enumerate every project + every project key the admin token can see,
+   * and build two fingerprints:
+   *  - knownOrgIds / knownUserIds: used by ownedBy() for self/other verdicts.
+   *  - redactedPrefixToKey: redacted_value (first 8 chars of the key) →
+   *    { projectId, keyId }. create() uses this to resolve project_id
+   *    from the current secret value with zero extra API calls.
+   */
+  async preloadOwnership(ctx: AuthContext): Promise<OwnershipPreload> {
+    const knownOrgIds = new Set<string>();
+    const knownUserIds = new Set<string>();
+    const redactedPrefixToKey = new Map<string, { projectId: string; keyId: string }>();
+
+    // /v1/me returns the orgs the admin key belongs to. Used for ownedBy.
+    const meRes = await request(OPENAI_ME_URL, { headers: authHeaders(ctx.token) });
+    if (!(meRes instanceof Error) && meRes.ok) {
+      const me = (await meRes.json()) as {
+        id?: string;
+        orgs?: { data?: Array<{ id?: string }> };
+      };
+      if (me.id) knownUserIds.add(me.id);
+      for (const org of me.orgs?.data ?? []) {
+        if (org.id) knownOrgIds.add(org.id);
+      }
+    }
+
+    // Enumerate projects, then keys per project. Each page is 100 rows.
+    let projectCursor: string | null = null;
+    const projects: OpenAIProject[] = [];
+    for (let page = 0; page < 50; page++) {
+      const qs = new URLSearchParams({ limit: "100" });
+      if (projectCursor) qs.set("after", projectCursor);
+      const res = await request(`${OPENAI_API_BASE}/organization/projects?${qs}`, {
+        headers: authHeaders(ctx.token),
+      });
+      if (res instanceof Error || !res.ok) break;
+      const body = (await res.json()) as OpenAIProjectListResponse;
+      projects.push(...(body.data ?? []));
+      if (!body.has_more || !body.last_id) break;
+      projectCursor = body.last_id;
+    }
+
+    // Fan out key listing in parallel but bounded so we do not hammer the API.
+    const concurrency = 8;
+    const queue = [...projects];
+    await Promise.all(
+      Array.from({ length: Math.min(concurrency, queue.length) }, async () => {
+        while (queue.length) {
+          const proj = queue.shift();
+          if (!proj) continue;
+          let keyCursor: string | null = null;
+          for (let page = 0; page < 20; page++) {
+            const qs = new URLSearchParams({ limit: "100" });
+            if (keyCursor) qs.set("after", keyCursor);
+            const res = await request(
+              `${OPENAI_API_BASE}/organization/projects/${proj.id}/api_keys?${qs}`,
+              { headers: authHeaders(ctx.token) },
+            );
+            if (res instanceof Error || !res.ok) break;
+            const body = (await res.json()) as OpenAIProjectApiKeyListResponse;
+            for (const key of body.data ?? []) {
+              if (!key.id) continue;
+              if (key.redacted_value) {
+                const prefix = normalizeRedacted(key.redacted_value);
+                if (prefix) redactedPrefixToKey.set(prefix, { projectId: proj.id, keyId: key.id });
+              }
+            }
+            if (!body.has_more || !body.last_id) break;
+            keyCursor = body.last_id;
+          }
+        }
+      }),
+    );
+
+    return {
+      knownOrgIds,
+      knownUserIds,
+      redactedPrefixToKey,
+    };
+  },
+
   async create(spec: RotationSpec, ctx: AuthContext): Promise<RotationResult<Secret>> {
+    const projectId = spec.metadata.project_id ?? resolveProjectId(spec);
+    if (!projectId) {
+      return {
+        ok: false,
+        error: makeError(
+          "invalid_spec",
+          "metadata.project_id is required (could not auto-resolve from current value redacted prefix)",
+          "openai",
+        ),
+      };
+    }
     const name = spec.metadata.name ?? `rotate-cli-${spec.secretId}-${Date.now()}`;
-    const res = await request(`${OPENAI_ADMIN_KEYS_BASE}`, {
+    const res = await request(`${OPENAI_API_BASE}/organization/projects/${projectId}/api_keys`, {
       method: "POST",
       headers: authHeaders(ctx.token),
       body: JSON.stringify({ name }),
     });
     if (res instanceof Error) return { ok: false, error: networkError(res) };
     if (!res.ok) return { ok: false, error: fromResponse(res, "create") };
-    const data = (await res.json()) as OpenAIAdminApiKey;
+    const data = (await res.json()) as OpenAIProjectApiKey;
     if (!data.value) {
       return {
         ok: false,
@@ -85,11 +195,11 @@ export const openaiAdapter: Adapter = {
         value: data.value,
         metadata: compactMetadata({
           key_id: data.id,
+          project_id: projectId,
           name: data.name,
           redacted_value: data.redacted_value,
-          owner_id: data.owner?.id,
-          owner_name: data.owner?.name,
-          owner_role: data.owner?.role,
+          owner_type: data.owner?.type,
+          owner_email: data.owner?.user?.email,
         }),
         createdAt: new Date(data.created_at * 1000).toISOString(),
       },
@@ -97,28 +207,46 @@ export const openaiAdapter: Adapter = {
   },
 
   async verify(secret: Secret, _ctx: AuthContext): Promise<RotationResult<boolean>> {
-    try {
-      await verifyOpenAIAuth({ kind: "env", varName: "OPENAI_ADMIN_KEY", token: secret.value });
-      return { ok: true, data: true };
-    } catch (cause) {
-      const message = cause instanceof Error ? cause.message : String(cause);
-      const status = Number.parseInt(message.split(": ").at(-1) ?? "", 10);
-      if (Number.isInteger(status)) {
-        return { ok: false, error: fromStatus(status, "verify") };
-      }
+    // New project keys can take a few seconds to propagate for inference calls,
+    // but /v1/models responds as soon as the key record exists. Use /v1/models
+    // rather than /v1/me so we verify the NEW key (project-scoped) not the
+    // admin token.
+    const res = await request(`${OPENAI_API_BASE}/models?limit=1`, {
+      headers: authHeaders(secret.value),
+    });
+    if (res instanceof Error) {
       return {
         ok: false,
-        error: makeError("network_error", `openai network error: ${message}`, "openai", { cause }),
+        error: makeError("network_error", `openai network error: ${res.message}`, "openai", {
+          cause: res,
+        }),
       };
     }
+    if (res.ok) return { ok: true, data: true };
+    return { ok: false, error: fromStatus(res.status, "verify") };
   },
 
   async revoke(secret: Secret, ctx: AuthContext): Promise<RotationResult<void>> {
+    const projectId = secret.metadata.project_id;
     const keyId = secret.metadata.key_id ?? secret.id;
-    const res = await request(`${OPENAI_ADMIN_KEYS_BASE}/${keyId}`, {
-      method: "DELETE",
-      headers: authHeaders(ctx.token),
-    });
+    if (!projectId) {
+      return {
+        ok: false,
+        error: makeError(
+          "invalid_spec",
+          "metadata.project_id is required on the old secret for revoke",
+          "openai",
+          { retryable: false },
+        ),
+      };
+    }
+    const res = await request(
+      `${OPENAI_API_BASE}/organization/projects/${projectId}/api_keys/${keyId}`,
+      {
+        method: "DELETE",
+        headers: authHeaders(ctx.token),
+      },
+    );
     if (res instanceof Error) return { ok: false, error: networkError(res) };
     if (res.status === 404) return { ok: true, data: undefined };
     if (!res.ok) return { ok: false, error: fromResponse(res, "revoke") };
@@ -126,18 +254,24 @@ export const openaiAdapter: Adapter = {
   },
 
   async list(filter: Record<string, string>, ctx: AuthContext): Promise<RotationResult<Secret[]>> {
+    const projectId = filter.project_id;
+    if (!projectId) {
+      return {
+        ok: false,
+        error: makeError("invalid_spec", "filter.project_id is required for list", "openai"),
+      };
+    }
     const limit = filter.limit ?? "20";
     const after = filter.after ? `&after=${encodeURIComponent(filter.after)}` : "";
-    const order = filter.order ? `&order=${encodeURIComponent(filter.order)}` : "";
     const res = await request(
-      `${OPENAI_ADMIN_KEYS_BASE}?limit=${encodeURIComponent(limit)}${after}${order}`,
+      `${OPENAI_API_BASE}/organization/projects/${projectId}/api_keys?limit=${encodeURIComponent(limit)}${after}`,
       {
         headers: authHeaders(ctx.token),
       },
     );
     if (res instanceof Error) return { ok: false, error: networkError(res) };
     if (!res.ok) return { ok: false, error: fromResponse(res, "list") };
-    const body = (await res.json()) as OpenAIListResponse;
+    const body = (await res.json()) as OpenAIProjectApiKeyListResponse;
     return {
       ok: true,
       data: (body.data ?? []).map((key) => ({
@@ -146,11 +280,9 @@ export const openaiAdapter: Adapter = {
         value: "<redacted>",
         metadata: compactMetadata({
           key_id: key.id,
+          project_id: projectId,
           name: key.name,
           redacted_value: key.redacted_value,
-          owner_id: key.owner?.id,
-          owner_name: key.owner?.name,
-          owner_role: key.owner?.role,
         }),
         createdAt: new Date(key.created_at * 1000).toISOString(),
       })),
@@ -302,4 +434,47 @@ function unknownOwnership(evidence: string): OwnershipResult {
     evidence,
     strategy: "api-introspection",
   };
+}
+
+/**
+ * OpenAI redacts project keys as `sk-proj-***...***XXXX` where the last 4
+ * characters are plaintext and stable. The fingerprint is just the last 4
+ * chars of the key, which the redacted form preserves. Entropy is enough
+ * that collisions across a single org are effectively zero.
+ */
+function normalizeRedacted(redacted: string): string | undefined {
+  const v = redacted.trim();
+  if (!v) return undefined;
+  // Take the trailing 4 non-asterisk characters as the fingerprint.
+  const match = v.match(/([^*]{4})$/);
+  return match?.[1];
+}
+
+function redactedFingerprint(fullKey: string): string | undefined {
+  const clean = fullKey.trim();
+  if (clean.length < 4) return undefined;
+  return clean.slice(-4);
+}
+
+/**
+ * Auto-resolve metadata.project_id by matching the current value against the
+ * preloaded redacted_value → projectId map. Returns undefined when the
+ * fingerprint is not in the preload (the key lives in an org the admin
+ * token cannot see, or the preload was not warmed).
+ */
+function resolveProjectId(spec: RotationSpec): string | undefined {
+  const current = spec.currentValue?.trim();
+  if (!current) return undefined;
+  const fingerprint = redactedFingerprint(current);
+  if (!fingerprint) return undefined;
+  const map = spec.preload?.redactedPrefixToKey;
+  if (map instanceof Map) {
+    const hit = map.get(fingerprint) as { projectId: string; keyId: string } | undefined;
+    return hit?.projectId;
+  }
+  if (map && typeof map === "object") {
+    const entry = (map as Record<string, { projectId?: string }>)[fingerprint];
+    return entry?.projectId;
+  }
+  return undefined;
 }

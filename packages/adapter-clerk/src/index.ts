@@ -52,6 +52,9 @@ export const clerkAdapter: Adapter = {
     // issue as 95 useless "unknown" verdicts).
     const knownFapiHosts = new Set<string>();
     const knownKids = new Set<string>();
+    // host → instance_id so create() can auto-resolve metadata without an
+    // extra API round-trip per rotation.
+    const hostToInstance = new Map<string, string>();
 
     const res = await fetch(`${PLAPI_BASE}/v1/platform/applications`, {
       headers: { Authorization: `Bearer ${ctx.token}` },
@@ -62,7 +65,7 @@ export const clerkAdapter: Adapter = {
         `Clerk PLAPI rejected token (${res.status}). Need a Platform API access token (ak_... or plapi_...) from dashboard.clerk.com → Settings → API keys → Platform API. ${body.slice(0, 120)}`,
       );
     }
-    if (!res.ok) return { knownFapiHosts, knownKids };
+    if (!res.ok) return { knownFapiHosts, knownKids, hostToInstance };
 
     const apps = (await res.json()) as Array<{
       application_id?: string;
@@ -86,6 +89,7 @@ export const clerkAdapter: Adapter = {
         if (decoded) {
           knownFapiHosts.add(decoded.host);
           pkList.push({ pk, host: decoded.host });
+          if (inst.instance_id) hostToInstance.set(decoded.host, inst.instance_id);
         }
       }
     }
@@ -113,15 +117,19 @@ export const clerkAdapter: Adapter = {
       }),
     );
 
-    return { knownFapiHosts, knownKids };
+    return { knownFapiHosts, knownKids, hostToInstance };
   },
 
   async create(spec: RotationSpec, ctx: AuthContext): Promise<RotationResult<Secret>> {
-    const instanceId = spec.metadata.instance_id;
+    const instanceId = spec.metadata.instance_id ?? resolveInstanceId(spec);
     if (!instanceId) {
       return {
         ok: false,
-        error: makeError("invalid_spec", "metadata.instance_id is required", "clerk"),
+        error: makeError(
+          "invalid_spec",
+          "metadata.instance_id is required (and auto-resolve via co-located CLERK_PUBLISHABLE_KEY + preload failed)",
+          "clerk",
+        ),
       };
     }
     const res = await fetch(`${PLAPI_BASE}/v1/instances/${instanceId}/api_keys`, {
@@ -391,6 +399,34 @@ function findPublishableKey(
   for (const name of PUBLISHABLE_KEY_NAMES) {
     const value = cleanValue(coLocatedVars?.[name]);
     if (value.startsWith("pk_")) return value;
+  }
+  return undefined;
+}
+
+/**
+ * Auto-resolve metadata.instance_id from the rotation spec's context:
+ *   1. spec.metadata.instance_id (explicit in config) — caller already handles this.
+ *   2. spec.currentValue + co-located CLERK_PUBLISHABLE_KEY → decodeFapi → host
+ *      → preload.hostToInstance → instance_id. Works without an extra PLAPI call
+ *      per rotation because preloadOwnership already enumerated every instance
+ *      the platform token can see.
+ * Returns undefined when the sibling publishable key is missing or the host
+ * is unknown to the admin — the caller should surface that as invalid_spec.
+ */
+function resolveInstanceId(spec: RotationSpec): string | undefined {
+  const pk = findPublishableKey(spec.currentValue ?? "", spec.coLocatedVars);
+  if (!pk) return undefined;
+  const decoded = decodeFapi(pk);
+  if (!decoded) return undefined;
+  const map = spec.preload?.hostToInstance;
+  if (map instanceof Map) {
+    return typeof map.get(decoded.host) === "string"
+      ? (map.get(decoded.host) as string)
+      : undefined;
+  }
+  if (map && typeof map === "object") {
+    const value = (map as Record<string, unknown>)[decoded.host];
+    return typeof value === "string" ? value : undefined;
   }
   return undefined;
 }

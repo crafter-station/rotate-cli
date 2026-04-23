@@ -183,6 +183,9 @@ export async function applyRotation(
       metadata: secret.metadata ?? {},
       reason: opts.reason,
       io: mode === "manual-assist" ? opts.io : undefined,
+      currentValue: opts.currentValue,
+      coLocatedVars: opts.coLocatedVars,
+      preload: opts.ownershipPreload,
     },
     authCtx,
   );

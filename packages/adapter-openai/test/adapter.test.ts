@@ -43,65 +43,77 @@ const mockOwnershipCtx = {
 };
 
 describe("adapter-openai.create", () => {
-  test("calls Admin API and returns Secret", async () => {
+  test("calls project API and returns Secret", async () => {
     mockFetch(
       () =>
         new Response(
           JSON.stringify({
-            object: "organization.admin_api_key",
+            object: "organization.project.api_key",
             id: "key_new",
             name: "rotate-cli-main",
-            redacted_value: "sk-admin...new",
-            value: "sk-admin-new",
+            redacted_value: "sk-proj-********abcd",
+            value: "sk-proj-new",
             created_at: 1711471533,
             owner: {
               type: "user",
-              id: "user_123",
-              name: "Jane Doe",
-              role: "owner",
+              user: { id: "user_123", name: "Jane Doe", email: "jane@example.com" },
             },
           }),
           { status: 201 },
         ),
     );
     const result = await openaiAdapter.create(
-      { secretId: "main", adapter: "openai", metadata: { name: "rotate-cli-main" } },
+      {
+        secretId: "main",
+        adapter: "openai",
+        metadata: { name: "rotate-cli-main", project_id: "proj_abc" },
+      },
       mockCtx,
     );
     expect(result.ok).toBe(true);
-    expect(result.data?.value).toBe("sk-admin-new");
+    expect(result.data?.value).toBe("sk-proj-new");
     expect(result.data?.metadata.key_id).toBe("key_new");
-    expect(result.data?.metadata.redacted_value).toBe("sk-admin...new");
-    expect(calls[0]?.url).toContain("/v1/organization/admin_api_keys");
+    expect(result.data?.metadata.project_id).toBe("proj_abc");
+    expect(calls[0]?.url).toContain("/v1/organization/projects/proj_abc/api_keys");
     expect(calls[0]?.init?.method).toBe("POST");
   });
 
   test("401 becomes auth_failed", async () => {
     mockFetch(() => new Response("unauthorized", { status: 401 }));
     const result = await openaiAdapter.create(
-      { secretId: "m", adapter: "openai", metadata: {} },
+      { secretId: "m", adapter: "openai", metadata: { project_id: "proj_abc" } },
       mockCtx,
     );
     expect(result.ok).toBe(false);
     expect(result.error?.code).toBe("auth_failed");
   });
+
+  test("missing project_id with no resolver returns invalid_spec", async () => {
+    mockFetch(() => new Response("", { status: 200 }));
+    const result = await openaiAdapter.create(
+      { secretId: "m", adapter: "openai", metadata: {} },
+      mockCtx,
+    );
+    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe("invalid_spec");
+  });
 });
 
 describe("adapter-openai.verify", () => {
-  test("calls Admin API with new secret", async () => {
+  test("calls /models with new secret", async () => {
     mockFetch(() => new Response(JSON.stringify({ data: [] }), { status: 200 }));
     const secret: Secret = {
       id: "key_new",
       provider: "openai",
-      value: "sk-admin-new",
-      metadata: {},
+      value: "sk-proj-new",
+      metadata: { project_id: "proj_abc" },
       createdAt: new Date().toISOString(),
     };
     const r = await openaiAdapter.verify(secret, mockCtx);
     expect(r.ok).toBe(true);
-    expect(calls[0]?.url).toMatch(/\/v1\/organization\/admin_api_keys\?limit=1$/);
+    expect(calls[0]?.url).toMatch(/\/v1\/models\?limit=1$/);
     expect((calls[0]?.init?.headers as Record<string, string>)?.Authorization).toBe(
-      "Bearer sk-admin-new",
+      "Bearer sk-proj-new",
     );
   });
 });
@@ -112,8 +124,8 @@ describe("adapter-openai.revoke", () => {
     const secret: Secret = {
       id: "key_old",
       provider: "openai",
-      value: "sk-admin-old",
-      metadata: { key_id: "key_old" },
+      value: "sk-proj-old",
+      metadata: { key_id: "key_old", project_id: "proj_abc" },
       createdAt: new Date().toISOString(),
     };
     const r = await openaiAdapter.revoke(secret, mockCtx);

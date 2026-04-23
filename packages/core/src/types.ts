@@ -134,6 +134,22 @@ export interface RotationSpec {
    * adapters should return an "unsupported" error (agent-mode / CI).
    */
   io?: PromptIO;
+  /** Plaintext current secret value (if the orchestrator could resolve it).
+   *  Adapters use this to auto-derive provider-side metadata such as
+   *  instance_id, installation_id, project_id — anything that can be
+   *  decoded from or queried with the current token itself. Optional:
+   *  adapters must still work when metadata is supplied explicitly. */
+  currentValue?: string;
+  /** Co-located env vars from the same consumer project (e.g. siblings
+   *  in a Vercel project). Useful when the metadata we need lives in a
+   *  sibling env var (e.g. CLERK_PUBLISHABLE_KEY encodes the Clerk FAPI
+   *  host → instance_id). */
+  coLocatedVars?: Record<string, string>;
+  /** The adapter's own preload payload, same shape returned by
+   *  preloadOwnership(). Adapters can use it during create() to avoid
+   *  N extra API calls per rotation — e.g. the clerk adapter stores a
+   *  host→instance_id map in preload and reuses it to resolve metadata. */
+  preload?: OwnershipPreload;
 }
 
 export interface RotationResult<T = Secret> {
