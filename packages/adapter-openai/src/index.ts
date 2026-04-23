@@ -294,6 +294,53 @@ export const openaiAdapter: Adapter = {
     ctx: AuthContext,
     opts?: OwnershipOptions,
   ): Promise<OwnershipResult> {
+    // Fast path: the preload enumerated every project key visible to the
+    // admin. Match the candidate key's trailing 4 chars against the
+    // redacted_value index. Zero network calls when preload is warm.
+    const fingerprint = redactedFingerprint(secretValue);
+    if (fingerprint) {
+      const map = opts?.preload?.redactedPrefixToKey;
+      const hit =
+        map instanceof Map
+          ? (map.get(fingerprint) as { projectId?: string } | undefined)
+          : map && typeof map === "object"
+            ? (map as Record<string, { projectId?: string }>)[fingerprint]
+            : undefined;
+      if (hit?.projectId) {
+        return {
+          verdict: "self",
+          adminCanBill: true,
+          scope: "org",
+          confidence: "high",
+          evidence: `OpenAI project key fingerprint matched project ${hit.projectId} in the admin key's org`,
+          strategy: "list-match",
+        };
+      }
+      // Preload is warm AND the fingerprint is NOT in the admin's projects
+      // → strong signal that the key belongs to another org. We keep
+      // confidence medium because a brand-new key created after preload
+      // would also miss; but the cost of a false "other" is a skip the
+      // user can override with --force-rotate-other.
+      const mapSize =
+        map instanceof Map
+          ? map.size
+          : map && typeof map === "object"
+            ? Object.keys(map).length
+            : 0;
+      if (mapSize > 0) {
+        return {
+          verdict: "other",
+          adminCanBill: false,
+          scope: "org",
+          confidence: "medium",
+          evidence: `OpenAI project key fingerprint (${fingerprint}) not found among ${mapSize} keys visible to the admin — likely owned by another org`,
+          strategy: "list-match",
+        };
+      }
+    }
+
+    // Slow fallback: /v1/me with the candidate key. Only reached when the
+    // preload was empty / failed. Keeps the legacy behavior intact.
     const res = await request(OPENAI_ME_URL, {
       headers: authHeaders(secretValue),
     });
