@@ -187,10 +187,30 @@ export async function applyRotation(
     authCtx,
   );
   if (!createResult.ok || !createResult.data) {
+    const err = createResult.error ?? makeError("provider_error", "create failed", secret.adapter);
+    // Missing-metadata errors are a config gap, not a provider failure —
+    // surface them as "skipped" so the user sees them in yellow (needs action)
+    // instead of red (something broke). The adapter returned invalid_spec
+    // with a "metadata.X is required" message, which means the scan cache
+    // doesn't have enough info for this adapter. Real fix is per-adapter
+    // auto-metadata resolution; until then, skip cleanly.
+    if (err.code === "invalid_spec" && /^metadata\.\w+ is required/i.test(err.message)) {
+      rotation.status = "skipped";
+      rotation.skipReason = {
+        kind: "adapter-missing-metadata",
+        evidence: err.message,
+      };
+      saveCheckpoint({
+        rotationId: rotation.id,
+        rotation,
+        stepCompleted: "none",
+        savedAt: new Date().toISOString(),
+      });
+      audit(opts.auditLog, rotation);
+      return { rotation, envelopeStatus: "skipped" };
+    }
     rotation.status = "failed";
-    rotation.errors.push(
-      createResult.error ?? makeError("provider_error", "create failed", secret.adapter),
-    );
+    rotation.errors.push(err);
     saveCheckpoint({
       rotationId: rotation.id,
       rotation,

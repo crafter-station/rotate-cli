@@ -352,7 +352,8 @@ export interface SkipReason {
     | "ownership-other"
     | "ownership-self-member-only"
     | "ownership-unknown-skipped"
-    | "ownership-current-value-unavailable";
+    | "ownership-current-value-unavailable"
+    | "adapter-missing-metadata";
   evidence: string;
 }
 

@@ -32,7 +32,7 @@ const VAR_TO_ADAPTER: Array<{ match: (name: string) => boolean; adapter: string 
   // openai / anthropic / fal / elevenlabs / groq / mistral / ai-gateway
   { match: (n) => n === "OPENAI_API_KEY" || n === "OPENAI_ADMIN_KEY", adapter: "openai" },
   { match: (n) => n === "ANTHROPIC_API_KEY" || n === "ANTHROPIC_ADMIN_KEY", adapter: "anthropic" },
-  { match: (n) => n === "FAL_API_KEY" || n === "FAL_KEY", adapter: "fal" },
+  { match: (n) => n === "FAL_API_KEY" || n === "FAL_KEY", adapter: "fal-ai" },
   { match: (n) => n === "ELEVENLABS_API_KEY", adapter: "elevenlabs" },
   { match: (n) => n === "AI_GATEWAY_API_KEY", adapter: "vercel-ai-gateway" },
   // email

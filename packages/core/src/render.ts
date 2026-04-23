@@ -288,6 +288,7 @@ export function renderApply(
           "ownership-self-member-only": pc.yellow("self (not-admin)"),
           "ownership-unknown-skipped": pc.yellow("unknown"),
           "ownership-current-value-unavailable": pc.dim("no-current-value"),
+          "adapter-missing-metadata": pc.yellow("needs-metadata"),
         }[s.reason ?? ""] ?? pc.dim(s.reason ?? "");
       print(`  ${pc.yellow("○")} ${pc.bold(s.secret_id)} ${kindLabel}`);
       if (s.evidence) print(`      ${pc.dim(truncate(s.evidence, 70))}`);
@@ -709,6 +710,38 @@ export function createApplyProgressRenderer(): {
     return pc.cyan("█".repeat(filled)) + pc.dim("░".repeat(width - filled));
   }
 
+  function termWidth(): number {
+    return Math.max(40, process.stdout.columns ?? 120);
+  }
+
+  const ESC = String.fromCharCode(0x1b);
+  const ANSI_RE = new RegExp(`${ESC}\\[[0-9;]*m`, "g");
+
+  function fitLine(text: string, max?: number): string {
+    const limit = max ?? termWidth() - 2;
+    // Strip ANSI color codes to measure length, but don't strip when truncating.
+    const stripped = text.replace(ANSI_RE, "");
+    if (stripped.length <= limit) return text;
+    // Cheap safe truncation: rebuild char-by-char until we hit the cap.
+    let out = "";
+    let visible = 0;
+    let i = 0;
+    while (i < text.length && visible < limit - 1) {
+      if (text[i] === ESC && text[i + 1] === "[") {
+        const end = text.indexOf("m", i);
+        if (end > -1) {
+          out += text.slice(i, end + 1);
+          i = end + 1;
+          continue;
+        }
+      }
+      out += text[i];
+      visible++;
+      i++;
+    }
+    return `${out}…`;
+  }
+
   function drawActive(): void {
     if (!active || !isTTY) return;
     clearLine();
@@ -719,8 +752,15 @@ export function createApplyProgressRenderer(): {
         ? pc.dim(` (${active.consumerDone}/${active.consumerTotal})`)
         : "";
     const step = pc.dim(`${active.step}${consumerPart}`);
+    // Truncate the secretId so the whole line stays on a single row — prevents
+    // the spinner from wrapping and leaving stale text behind on redraw.
+    const idBudget = Math.max(20, termWidth() - 30 - active.adapter.length - active.step.length);
+    const secret =
+      active.secretId.length > idBudget
+        ? `${active.secretId.slice(0, idBudget - 1)}…`
+        : active.secretId.padEnd(Math.min(idBudget, 30));
     process.stdout.write(
-      `  ${spin} ${progress} ${active.secretId.padEnd(30)} ${pc.dim(`[${active.adapter}]`)} ${step}`,
+      fitLine(`  ${spin} ${progress} ${secret} ${pc.dim(`[${active.adapter}]`)} ${step}`),
     );
     lineActive = true;
   }
@@ -735,7 +775,9 @@ export function createApplyProgressRenderer(): {
     const decrypted = pc.dim(`· ${siblings.decrypted} decrypted`);
     const rateStr = rate > 0 ? pc.dim(` · ${rate}/s`) : "";
     process.stdout.write(
-      `  ${spin} ${bar(pct)}  ${siblings.completed}/${siblings.total} ${decrypted}${rateStr}`,
+      fitLine(
+        `  ${spin} ${bar(pct)}  ${siblings.completed}/${siblings.total} ${decrypted}${rateStr}`,
+      ),
     );
     lineActive = true;
   }
@@ -750,7 +792,7 @@ export function createApplyProgressRenderer(): {
     const resolved = pc.dim(`· ${resolving.resolved} resolved`);
     const rateStr = rate > 0 ? pc.dim(` · ${rate}/s`) : "";
     process.stdout.write(
-      `  ${spin} ${bar(pct)}  ${resolving.done}/${resolving.total} ${resolved}${rateStr}`,
+      fitLine(`  ${spin} ${bar(pct)}  ${resolving.done}/${resolving.total} ${resolved}${rateStr}`),
     );
     lineActive = true;
   }
