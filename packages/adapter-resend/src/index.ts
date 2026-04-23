@@ -64,8 +64,15 @@ export const resendAdapter: Adapter = {
     }
 
     const name = apiKeyName(spec);
-    const body: Record<string, string> = { name };
-    if (permission) body.permission = permission;
+    // Default to full_access. The verify() step hits GET /api-keys to confirm
+    // the new key is live, and that endpoint rejects sending_access tokens
+    // with 401 (the same 401 Hunter saw on the first smoke test). Callers who
+    // want a scoped key set metadata.permission = "sending_access" in
+    // rotate.config.yaml explicitly.
+    const body: Record<string, string> = {
+      name,
+      permission: permission ?? "full_access",
+    };
 
     const res = await request(RESEND_API_KEYS_BASE, {
       method: "POST",
