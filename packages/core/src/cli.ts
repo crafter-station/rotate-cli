@@ -706,7 +706,19 @@ export async function runCli(argv: string[]): Promise<void> {
                 totalProjects: projectEntries.length,
               });
               const siblingStart = Date.now();
-              const siblings = await fetchProjectSiblings({ token, projects: projectEntries });
+              const siblings = await fetchProjectSiblings({
+                token,
+                projects: projectEntries,
+                onProgress: (p) => {
+                  applyProgress?.handle({
+                    kind: "siblings-progress",
+                    completed: p.completed,
+                    total: p.totalProjects,
+                    decrypted: p.decrypted,
+                    currentSlug: p.currentSlug,
+                  });
+                },
+              });
               for (const [k, v] of siblings) applyProjectVars.set(k, v);
               applyProgress?.handle({
                 kind: "siblings-done",

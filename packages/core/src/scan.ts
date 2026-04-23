@@ -468,10 +468,18 @@ export async function scanVercel(opts: ScanOptions): Promise<{
  * then fans out env fetches by id, and finally re-keys the result by
  * slug so callers can look it up with the scan cache key.
  */
+export interface FetchSiblingsProgress {
+  totalProjects: number;
+  completed: number;
+  decrypted: number;
+  currentSlug?: string;
+}
+
 export async function fetchProjectSiblings(args: {
   token: string;
   projects: Array<{ key: string; teamId?: string }>;
   concurrency?: number;
+  onProgress?: (p: FetchSiblingsProgress) => void;
 }): Promise<Map<string, Record<string, string>>> {
   const result = new Map<string, Record<string, string>>();
   const headers = { Authorization: `Bearer ${args.token}` };
@@ -567,19 +575,39 @@ export async function fetchProjectSiblings(args: {
     }
   }
 
+  // Mutable counters shared across the concurrent workers. Simple ints,
+  // incremented atomically per project completion, emitted via onProgress.
+  const totalProjects = queue.length;
+  let completed = 0;
+  let decrypted = 0;
+
   await Promise.all(
     Array.from({ length: Math.min(concurrency, queue.length) }, async () => {
       while (queue.length) {
         const proj = queue.shift();
-        if (!proj?.resolved) continue;
+        if (!proj?.resolved) {
+          // Unresolved projects still count as completed so the progress
+          // bar does not stall at 99% when some slugs are missing from
+          // the slug->id map.
+          if (proj) {
+            completed++;
+            args.onProgress?.({ totalProjects, completed, decrypted, currentSlug: proj.slug });
+          }
+          continue;
+        }
         const { id, teamId } = proj.resolved;
         const teamQs = teamId ? `&teamId=${teamId}` : "";
+        args.onProgress?.({ totalProjects, completed, decrypted, currentSlug: proj.slug });
 
-        // List envs (no decrypt — we just need the ids + types).
+        // List envs (no decrypt, we just need the ids + types).
         const listRes = await fetchWithTimeout(
           `${VERCEL_BASE}/v9/projects/${id}/env?decrypt=false${teamQs ? `&teamId=${teamId}` : ""}`,
         );
-        if (!listRes?.ok) continue;
+        if (!listRes?.ok) {
+          completed++;
+          args.onProgress?.({ totalProjects, completed, decrypted });
+          continue;
+        }
         const listBody = (await listRes.json()) as {
           envs?: Array<{ id: string; key: string; type: string }>;
         };
@@ -591,7 +619,7 @@ export async function fetchProjectSiblings(args: {
         );
 
         // Decrypt in parallel within the project (inner concurrency=5 so we
-        // don't pile on too aggressively — outer loop already has outer
+        // do not pile on too aggressively, outer loop already has outer
         // concurrency, total is concurrency*5 in flight).
         const vars: Record<string, string> = {};
         const envQueue = [...decryptable];
@@ -611,6 +639,9 @@ export async function fetchProjectSiblings(args: {
           }),
         );
         result.set(proj.slug, vars);
+        completed++;
+        decrypted++;
+        args.onProgress?.({ totalProjects, completed, decrypted, currentSlug: proj.slug });
       }
     }),
   );

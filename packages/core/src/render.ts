@@ -621,6 +621,13 @@ export type ApplyProgressEvent =
   | { kind: "preload-done"; adapter: string; durationMs: number; info?: string }
   | { kind: "preload-failed"; adapter: string; durationMs: number; error: string }
   | { kind: "siblings-start"; totalProjects: number }
+  | {
+      kind: "siblings-progress";
+      completed: number;
+      total: number;
+      decrypted: number;
+      currentSlug?: string;
+    }
   | { kind: "siblings-done"; decrypted: number; totalProjects: number; durationMs: number }
   | { kind: "dedup"; totalEntries: number; uniqueGroups: number }
   | { kind: "start"; total: number }
@@ -655,12 +662,20 @@ export function createApplyProgressRenderer(): {
     adapter: string;
     step: string;
   } | null = null;
+  let siblings: {
+    completed: number;
+    total: number;
+    decrypted: number;
+    currentSlug?: string;
+  } | null = null;
   let lineActive = false;
+  const siblingsStartedAt = { ts: 0 };
 
   const interval = isTTY
     ? setInterval(() => {
         frame = (frame + 1) % frames.length;
         if (active) drawActive();
+        else if (siblings) drawSiblings();
       }, 80)
     : null;
 
@@ -668,6 +683,11 @@ export function createApplyProgressRenderer(): {
     if (!isTTY || !lineActive) return;
     process.stdout.write("\r\x1b[2K");
     lineActive = false;
+  }
+
+  function bar(pct: number, width = 24): string {
+    const filled = Math.max(0, Math.min(width, Math.round(pct * width)));
+    return pc.cyan("█".repeat(filled)) + pc.dim("░".repeat(width - filled));
   }
 
   function drawActive(): void {
@@ -682,10 +702,26 @@ export function createApplyProgressRenderer(): {
     lineActive = true;
   }
 
+  function drawSiblings(): void {
+    if (!siblings || !isTTY) return;
+    clearLine();
+    const spin = pc.cyan(frames[frame]);
+    const pct = siblings.total > 0 ? siblings.completed / siblings.total : 0;
+    const elapsed = siblingsStartedAt.ts > 0 ? (Date.now() - siblingsStartedAt.ts) / 1000 : 0;
+    const rate = elapsed > 0 ? Math.round(siblings.completed / elapsed) : 0;
+    const decrypted = pc.dim(`· ${siblings.decrypted} decrypted`);
+    const rateStr = rate > 0 ? pc.dim(` · ${rate}/s`) : "";
+    process.stdout.write(
+      `  ${spin} ${bar(pct)}  ${siblings.completed}/${siblings.total} ${decrypted}${rateStr}`,
+    );
+    lineActive = true;
+  }
+
   function writeStatic(line: string): void {
     clearLine();
     process.stdout.write(`${line}\n`);
     if (active) drawActive();
+    else if (siblings) drawSiblings();
   }
 
   function handle(event: ApplyProgressEvent): void {
@@ -708,7 +744,19 @@ export function createApplyProgressRenderer(): {
       writeStatic(
         `\nFetching co-located env vars from ${event.totalProjects} Vercel project(s)...`,
       );
+      siblings = { completed: 0, total: event.totalProjects, decrypted: 0 };
+      siblingsStartedAt.ts = Date.now();
+      drawSiblings();
+    } else if (event.kind === "siblings-progress") {
+      if (siblings) {
+        siblings.completed = event.completed;
+        siblings.total = event.total;
+        siblings.decrypted = event.decrypted;
+        siblings.currentSlug = event.currentSlug;
+        drawSiblings();
+      }
     } else if (event.kind === "siblings-done") {
+      siblings = null;
       const duration =
         event.durationMs > 1000
           ? `${(event.durationMs / 1000).toFixed(1)}s`
@@ -768,6 +816,7 @@ export function createApplyProgressRenderer(): {
     if (interval) clearInterval(interval);
     clearLine();
     active = null;
+    siblings = null;
   }
 
   return { handle, stop };
