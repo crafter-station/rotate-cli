@@ -389,7 +389,9 @@ function groupBy<T>(items: T[], key: (t: T) => string): Record<string, T[]> {
   const out: Record<string, T[]> = {};
   for (const item of items) {
     const k = key(item);
-    (out[k] ??= []).push(item);
+    const bucket = out[k] ?? [];
+    bucket.push(item);
+    out[k] = bucket;
   }
   return out;
 }
