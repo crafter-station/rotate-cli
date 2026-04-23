@@ -247,10 +247,18 @@ export interface SkipEntry {
   verdict?: string;
 }
 
+export interface ApplyRunSummary {
+  rotated: number;
+  skipped: number;
+  failed: number;
+  /** The original pre-rotation ownership verdicts captured during who. */
+  ownership?: OwnershipSummary;
+}
+
 export function renderApply(
   rotations: RotationResult[],
   skipped: SkipEntry[],
-  ownershipSummary: OwnershipSummary,
+  summary: ApplyRunSummary,
   nextActions: string[],
 ): void {
   print(pc.bold("rotate-cli apply"));
@@ -288,13 +296,10 @@ export function renderApply(
 
   print("");
   const parts: string[] = [];
-  if (ownershipSummary.self > 0) parts.push(`${pc.green(String(ownershipSummary.self))} self`);
-  if (ownershipSummary.other > 0) parts.push(`${pc.red(String(ownershipSummary.other))} other`);
-  if (ownershipSummary.unknown > 0)
-    parts.push(`${pc.yellow(String(ownershipSummary.unknown))} unknown`);
-  if (ownershipSummary.not_checked > 0)
-    parts.push(`${pc.dim(String(ownershipSummary.not_checked))} no-check`);
-  if (parts.length > 0) print(`Ownership: ${parts.join(", ")}`);
+  if (summary.rotated > 0) parts.push(`${pc.green(String(summary.rotated))} rotated`);
+  if (summary.skipped > 0) parts.push(`${pc.yellow(String(summary.skipped))} skipped`);
+  if (summary.failed > 0) parts.push(`${pc.red(String(summary.failed))} failed`);
+  if (parts.length > 0) print(`Summary: ${parts.join(", ")}`);
 
   if (nextActions.length > 0) {
     print("");

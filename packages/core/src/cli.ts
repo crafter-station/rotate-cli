@@ -489,7 +489,10 @@ export async function runCli(argv: string[]): Promise<void> {
       "rotate even when the secret belongs to another account (changes billing)",
     )
     .option("--no-ownership-check", "disable the ownership gate entirely (forbidden in agent mode)")
-    .option("--from-scan", "load selector targets from the cached scan output")
+    .option(
+      "--no-from-scan",
+      "load selector targets from rotate.config.yaml instead of the scan cache",
+    )
     .option(
       "--scan-max-age <duration>",
       `max age of cached scan before forcing a refresh (default: ${DEFAULT_SCAN_MAX_AGE})`,
@@ -498,11 +501,11 @@ export async function runCli(argv: string[]): Promise<void> {
     .option("--fresh", "ignore the cached scan and force a fresh scan")
     .option(
       "--confirm-bulk",
-      "required when --from-scan selects more than 20 rotations (safety guard)",
+      "required when scan-cache source selects more than 20 rotations (safety guard)",
     )
     .option(
       "--auto-only",
-      "rotate only auto-mode adapters; list manual-assist adapters as pending (default for --from-scan)",
+      "rotate only auto-mode adapters; list manual-assist adapters as pending (default)",
     )
     .option(
       "--manual-only",
@@ -872,11 +875,20 @@ export async function runCli(argv: string[]): Promise<void> {
               error: c.error,
             })),
           }));
+        // Summary counts actual rotation outcomes. Gives the user a clear
+        // tally of what actually happened during this apply run, independent
+        // of the ownership gate breakdown (which the who command already
+        // showed before they hit apply).
+        const runSummary = {
+          rotated: results.filter(
+            (r) => r.envelopeStatus === "success" || r.envelopeStatus === "partial",
+          ).length,
+          skipped: results.filter((r) => r.envelopeStatus === "skipped").length,
+          failed: results.filter((r) => r.envelopeStatus === "error").length,
+          ownership: ownershipSummary,
+        };
         if (applyPretty) {
-          renderApply(successfulRotations, skipped, ownershipSummary, [
-            ...nextActions,
-            ...skipActions,
-          ]);
+          renderApply(successfulRotations, skipped, runSummary, [...nextActions, ...skipActions]);
           process.exit(
             anyError ? EXIT.PROVIDER_ERROR : anyPartial ? EXIT.IN_GRACE_WARNING : EXIT.OK,
           );
@@ -890,6 +902,7 @@ export async function runCli(argv: string[]): Promise<void> {
             data: {
               rotations: successfulRotations,
               skipped,
+              summary: runSummary,
               ownership_summary: ownershipSummary,
               mode: manualOnly ? "manual-only" : "auto-only",
               deferred: deferred.map((s) => ({
@@ -912,8 +925,8 @@ export async function runCli(argv: string[]): Promise<void> {
     .option("--provider <name>")
     .option("--tag <name>")
     .option(
-      "--from-scan",
-      "use the cached scan output (from `rotate-cli scan`) instead of rotate.config.yaml",
+      "--no-from-scan",
+      "load selector targets from rotate.config.yaml instead of the scan cache",
     )
     .option(
       "--scan-max-age <duration>",
