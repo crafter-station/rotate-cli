@@ -255,11 +255,20 @@ export interface ApplyRunSummary {
   ownership?: OwnershipSummary;
 }
 
+export interface FailedRotation {
+  secret_id: string;
+  adapter: string;
+  reason: string;
+  evidence?: string;
+}
+
 export interface RenderApplyOptions {
   /** Unroll every rotated/skipped row. Default: false — summary view only. */
   verbose?: boolean;
   /** Cap on how many rows per bucket the summary view prints. Default 5. */
   summaryLimit?: number;
+  /** Rotations that actually failed (not skipped). Grouped by error code. */
+  failed?: FailedRotation[];
 }
 
 export function renderApply(
@@ -316,6 +325,36 @@ export function renderApply(
           "adapter-missing-metadata": "needs metadata",
         }[reason] ?? reason;
       print(`  ${pc.yellow("○")} ${label.padEnd(22)} ${pc.dim(`× ${group.length}`)}`);
+    }
+  }
+
+  // Failed rotations grouped by error code (auth_failed, not_found, …).
+  // Same pattern as skipped: one line per reason, verbose unrolls details.
+  const failed = opts.failed ?? [];
+  if (failed.length > 0) {
+    print("");
+    const byReason = groupBy(failed, (f) => f.reason);
+    for (const reason of Object.keys(byReason).sort()) {
+      const group = byReason[reason]!;
+      const label =
+        {
+          auth_failed: "auth failed",
+          not_found: "not found",
+          provider_error: "provider error",
+          network_error: "network error",
+          rate_limited: "rate limited",
+          unsupported: "unsupported",
+          invalid_spec: "invalid spec",
+        }[reason] ?? reason;
+      print(`  ${pc.red("✗")} ${label.padEnd(22)} ${pc.dim(`× ${group.length}`)}`);
+    }
+    if (verbose) {
+      print("");
+      print(pc.dim(`Failed ${failed.length}:`));
+      for (const f of failed) {
+        print(`  ${pc.red("●")} ${f.secret_id} ${pc.dim(`[${f.adapter}]`)} ${pc.dim(f.reason)}`);
+        if (f.evidence) print(`      ${pc.dim(truncate(f.evidence, 100))}`);
+      }
     }
   }
 

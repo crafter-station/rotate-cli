@@ -910,8 +910,12 @@ export async function runCli(argv: string[]): Promise<void> {
         }));
         const ownershipSummary = buildOwnershipSummary(results);
         const skipActions = buildSkipActions(skippedResults);
+        // Only rotations that actually produced a new secret belong in
+        // the "rotated" list. `partial` means create succeeded but some
+        // consumer propagation failed — that's still a successful rotation
+        // from the provider's perspective, so we include it.
         const successfulRotations = results
-          .filter((r) => r.envelopeStatus !== "skipped")
+          .filter((r) => r.envelopeStatus === "success" || r.envelopeStatus === "partial")
           .map((r) => ({
             rotation_id: r.rotation.id,
             secret_id: r.rotation.secretId,
@@ -922,6 +926,17 @@ export async function runCli(argv: string[]): Promise<void> {
               status: c.status,
               error: c.error,
             })),
+          }));
+        // Failed rotations get their own list so the renderer can show the
+        // real reason (auth_failed, not_found, etc.) instead of lumping
+        // them into either "rotated" or "skipped".
+        const failedRotations = results
+          .filter((r) => r.envelopeStatus === "error")
+          .map((r) => ({
+            secret_id: r.rotation.secretId,
+            adapter: r.rotation.adapter,
+            reason: r.rotation.errors[0]?.code ?? "unknown",
+            evidence: r.rotation.errors[0]?.message,
           }));
         // Summary counts actual rotation outcomes. Gives the user a clear
         // tally of what actually happened during this apply run, independent
@@ -938,6 +953,7 @@ export async function runCli(argv: string[]): Promise<void> {
         if (applyPretty) {
           renderApply(successfulRotations, skipped, runSummary, [...nextActions, ...skipActions], {
             verbose: opts.verbose,
+            failed: failedRotations,
           });
           process.exit(
             anyError ? EXIT.PROVIDER_ERROR : anyPartial ? EXIT.IN_GRACE_WARNING : EXIT.OK,
