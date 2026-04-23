@@ -36,6 +36,10 @@ export interface ApplyOptions {
    *  is mode="manual-assist" this MUST be present and interactive; the
    *  orchestrator rejects the rotation otherwise. */
   io?: PromptIO;
+  /** Called as the rotation advances through its pipeline. Wired by the CLI
+   *  into the apply progress renderer so the user sees per-rotation stage
+   *  transitions (ownership -> create -> propagate -> trigger -> verify). */
+  onStep?: (step: "ownership" | "create" | "propagate" | "trigger" | "verify") => void;
 }
 
 export interface ApplyResult {
@@ -79,6 +83,7 @@ export async function applyRotation(
   });
 
   // Step 0: Ownership gate (optional, opt-out via opts.noOwnershipCheck).
+  opts.onStep?.("ownership");
   const authCtx = await adapter.auth();
   if (adapter.ownedBy && !opts.noOwnershipCheck && opts.currentValue) {
     try {
@@ -163,6 +168,7 @@ export async function applyRotation(
   }
 
   // Step 1: Create.
+  opts.onStep?.("create");
   const createResult = await adapter.create(
     {
       secretId: secret.id,
@@ -196,6 +202,7 @@ export async function applyRotation(
   });
 
   // Step 2: Propagate (parallel fail-fast).
+  opts.onStep?.("propagate");
   await propagateAll(rotation, opts.parallel ?? 10);
   saveCheckpoint({
     rotationId: rotation.id,
@@ -205,6 +212,7 @@ export async function applyRotation(
   });
 
   // Step 3: Trigger redeploys (parallel, best-effort).
+  opts.onStep?.("trigger");
   await triggerAll(rotation);
   saveCheckpoint({
     rotationId: rotation.id,
@@ -214,6 +222,7 @@ export async function applyRotation(
   });
 
   // Step 4: Verify adapter-side + consumer-side.
+  opts.onStep?.("verify");
   if (!opts.skipVerify) {
     const adapterVerify = await adapter.verify(rotation.newSecret, authCtx);
     if (!adapterVerify.ok) {

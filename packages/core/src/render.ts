@@ -612,6 +612,12 @@ export function createOwnershipProgressRenderer(): {
 // ---------------------------------------------------------------------------
 
 export type ApplyProgressEvent =
+  | { kind: "preload-start"; adapters: string[] }
+  | { kind: "preload-done"; adapter: string; durationMs: number; info?: string }
+  | { kind: "preload-failed"; adapter: string; durationMs: number; error: string }
+  | { kind: "siblings-start"; totalProjects: number }
+  | { kind: "siblings-done"; decrypted: number; totalProjects: number; durationMs: number }
+  | { kind: "dedup"; totalEntries: number; uniqueGroups: number }
   | { kind: "start"; total: number }
   | { kind: "rotation-start"; index: number; total: number; secretId: string; adapter: string }
   | {
@@ -678,8 +684,41 @@ export function createApplyProgressRenderer(): {
   }
 
   function handle(event: ApplyProgressEvent): void {
-    if (event.kind === "start") {
-      writeStatic(`${pc.bold("rotate-cli apply")}\n\nApplying ${event.total} rotation(s)...`);
+    if (event.kind === "preload-start") {
+      writeStatic(`${pc.bold("rotate-cli apply")}\n\nPreloading ownership indexes...`);
+    } else if (event.kind === "preload-done") {
+      const duration =
+        event.durationMs > 1000
+          ? `${(event.durationMs / 1000).toFixed(1)}s`
+          : `${event.durationMs}ms`;
+      const info = event.info ? pc.dim(`· ${event.info}`) : "";
+      writeStatic(
+        `  ${pc.green("✓")} ${event.adapter.padEnd(20)} ${info} ${pc.dim(`· ${duration}`)}`,
+      );
+    } else if (event.kind === "preload-failed") {
+      writeStatic(
+        `  ${pc.yellow("⚠")} ${event.adapter.padEnd(20)} ${pc.dim(`· ${event.error.slice(0, 50)}`)}`,
+      );
+    } else if (event.kind === "siblings-start") {
+      writeStatic(
+        `\nFetching co-located env vars from ${event.totalProjects} Vercel project(s)...`,
+      );
+    } else if (event.kind === "siblings-done") {
+      const duration =
+        event.durationMs > 1000
+          ? `${(event.durationMs / 1000).toFixed(1)}s`
+          : `${event.durationMs}ms`;
+      writeStatic(
+        `  ${pc.green("✓")} vercel-siblings     ${pc.dim(`· ${event.decrypted}/${event.totalProjects} decrypted · ${duration}`)}`,
+      );
+    } else if (event.kind === "dedup") {
+      if (event.uniqueGroups < event.totalEntries) {
+        writeStatic(
+          `\n${pc.dim(`Deduplicating: ${event.totalEntries} entries become ${event.uniqueGroups} unique rotation(s).`)}`,
+        );
+      }
+    } else if (event.kind === "start") {
+      writeStatic(`\nApplying ${event.total} rotation(s)...`);
     } else if (event.kind === "rotation-start") {
       active = {
         index: event.index,

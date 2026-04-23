@@ -640,6 +640,42 @@ export async function runCli(argv: string[]): Promise<void> {
         // adapters get `undefined` — the orchestrator rejects misuse.
         const applyIO = manualOnly ? createPromptIO() : undefined;
 
+        // Preload phase: announce to the renderer, fetch each adapter's
+        // ownership index, then the Vercel sibling env vars. Mirrors the
+        // two-phase UI the who command uses so the user sees progress
+        // instead of a silent 15 second pause on large selections.
+        const uniqueAdapters = [...new Set(selected.map((s) => s.adapter))];
+        const adaptersWithPreload = uniqueAdapters.filter((n) => getAdapter(n)?.preloadOwnership);
+        const preloadMap = new Map<string, import("./types.ts").OwnershipPreload>();
+        if (!noOwnershipCheck && adaptersWithPreload.length > 0) {
+          applyProgress?.handle({ kind: "preload-start", adapters: adaptersWithPreload });
+          await Promise.all(
+            adaptersWithPreload.map(async (name) => {
+              const adapter = getAdapter(name);
+              if (!adapter?.preloadOwnership) return;
+              const startedPreload = Date.now();
+              try {
+                const ctx = await adapter.auth();
+                const preload = await adapter.preloadOwnership(ctx);
+                preloadMap.set(name, preload);
+                applyProgress?.handle({
+                  kind: "preload-done",
+                  adapter: name,
+                  durationMs: Date.now() - startedPreload,
+                  info: summarizePreload(preload),
+                });
+              } catch (cause) {
+                applyProgress?.handle({
+                  kind: "preload-failed",
+                  adapter: name,
+                  durationMs: Date.now() - startedPreload,
+                  error: String(cause),
+                });
+              }
+            }),
+          );
+        }
+
         // Pre-fetch project siblings so resolveCurrentValue can read
         // coLocatedVars without N extra Vercel round-trips. Same pattern as
         // the who command. Only activates when we're consuming the scan
@@ -662,15 +698,22 @@ export async function runCli(argv: string[]): Promise<void> {
               }
             }
             if (projectEntries.length > 0) {
+              applyProgress?.handle({
+                kind: "siblings-start",
+                totalProjects: projectEntries.length,
+              });
+              const siblingStart = Date.now();
               const siblings = await fetchProjectSiblings({ token, projects: projectEntries });
               for (const [k, v] of siblings) applyProjectVars.set(k, v);
+              applyProgress?.handle({
+                kind: "siblings-done",
+                decrypted: siblings.size,
+                totalProjects: projectEntries.length,
+                durationMs: Date.now() - siblingStart,
+              });
             }
           }
         }
-
-        const { map: preloadMap } = noOwnershipCheck
-          ? { map: new Map() }
-          : await preloadOwnershipForSecrets(selected);
 
         // Resolve current value for each entry and group by (adapter, value_hash).
         // Each group rotates ONCE; the representative's consumers[] is the
@@ -708,6 +751,11 @@ export async function runCli(argv: string[]): Promise<void> {
         }
 
         const groupList = [...groups.values()];
+        applyProgress?.handle({
+          kind: "dedup",
+          totalEntries: selected.length,
+          uniqueGroups: groupList.length,
+        });
         applyProgress?.handle({ kind: "start", total: groupList.length });
         const results = [];
         for (let i = 0; i < groupList.length; i++) {
@@ -749,6 +797,7 @@ export async function runCli(argv: string[]): Promise<void> {
             forceRotateOther: opts.forceRotateOther,
             noOwnershipCheck,
             io: applyIO,
+            onStep: (step) => applyProgress?.handle({ kind: "rotation-step", index, step }),
           });
           results.push(r);
           applyProgress?.handle({
