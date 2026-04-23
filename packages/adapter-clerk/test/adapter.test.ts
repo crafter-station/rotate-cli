@@ -32,53 +32,75 @@ afterEach(() => {
 
 const mockCtx: AuthContext = { kind: "env", varName: "CLERK_PLAPI_TOKEN", token: "plapi_test" };
 
-describe("adapter-clerk.create", () => {
-  test("calls PLAPI and returns Secret", async () => {
-    mockFetch(
-      () =>
-        new Response(
-          JSON.stringify({
-            id: "key_new",
-            secret: "sk_live_abc",
-            instance_id: "ins_x",
-            created_at: 100,
-          }),
-          { status: 201 },
-        ),
-    );
+function mockIO(pasted: string, confirm = true): import("@rotate/core/types").PromptIO {
+  return {
+    isInteractive: true,
+    async promptSecret() {
+      return pasted;
+    },
+    async confirm() {
+      return confirm;
+    },
+    async select<T>() {
+      return undefined as unknown as T;
+    },
+    note(_: string) {},
+    async close() {},
+  } as unknown as import("@rotate/core/types").PromptIO;
+}
+
+describe("adapter-clerk.create (manual-assist)", () => {
+  test("prompts for a new Secret Key and returns it as the rotation value", async () => {
+    const io = mockIO("sk_live_NEWPASTE123");
     const result = await clerkAdapter.create(
-      { secretId: "main", adapter: "clerk", metadata: { instance_id: "ins_x" } },
+      {
+        secretId: "main",
+        adapter: "clerk",
+        metadata: {},
+        io,
+        currentValue: "sk_live_old",
+        coLocatedVars: { CLERK_PUBLISHABLE_KEY: "pk_test_ZXhhbXBsZS5hY2NvdW50cy5kZXYk" },
+        preload: {
+          hostToInstance: new Map([
+            [
+              "example.accounts.dev",
+              { instanceId: "ins_x", appId: "app_123", environment: "development" },
+            ],
+          ]),
+        },
+      },
       mockCtx,
     );
     expect(result.ok).toBe(true);
-    expect(result.data?.value).toBe("sk_live_abc");
-    expect(result.data?.metadata.key_id).toBe("key_new");
-    expect(calls[0]?.url).toContain("/v1/instances/ins_x/api_keys");
+    expect(result.data?.value).toBe("sk_live_NEWPASTE123");
+    expect(result.data?.metadata.manual_assist).toBe("true");
+    expect(result.data?.metadata.app_id).toBe("app_123");
+    expect(result.data?.metadata.instance_id).toBe("ins_x");
   });
 
-  test("missing instance_id returns invalid_spec", async () => {
+  test("rejects values that do not look like Clerk Secret Keys", async () => {
+    const io = mockIO("not-a-key");
     const result = await clerkAdapter.create(
-      { secretId: "main", adapter: "clerk", metadata: {} },
+      { secretId: "main", adapter: "clerk", metadata: {}, io },
       mockCtx,
     );
     expect(result.ok).toBe(false);
     expect(result.error?.code).toBe("invalid_spec");
   });
 
-  test("401 becomes auth_failed", async () => {
-    mockFetch(() => new Response("unauthorized", { status: 401 }));
+  test("without an interactive IO returns unsupported", async () => {
     const result = await clerkAdapter.create(
-      { secretId: "m", adapter: "clerk", metadata: { instance_id: "ins_x" } },
+      { secretId: "main", adapter: "clerk", metadata: {} },
       mockCtx,
     );
     expect(result.ok).toBe(false);
-    expect(result.error?.code).toBe("auth_failed");
+    expect(result.error?.code).toBe("unsupported");
   });
 });
 
 describe("adapter-clerk.verify", () => {
-  test("calls /v1/me with new secret", async () => {
-    mockFetch(() => new Response(JSON.stringify({ id: "me" }), { status: 200 }));
+  test("calls /v1/jwks with new secret", async () => {
+    mockFetch(() => new Response(JSON.stringify({ keys: [] }), { status: 200 }));
     const secret: Secret = {
       id: "key_new",
       provider: "clerk",
@@ -88,7 +110,7 @@ describe("adapter-clerk.verify", () => {
     };
     const r = await clerkAdapter.verify(secret, mockCtx);
     expect(r.ok).toBe(true);
-    expect(calls[0]?.url).toMatch(/\/v1\/me$/);
+    expect(calls[0]?.url).toMatch(/\/v1\/jwks$/);
     expect((calls[0]?.init?.headers as Record<string, string>)?.Authorization).toBe(
       "Bearer sk_live_abc",
     );
@@ -108,18 +130,32 @@ describe("adapter-clerk.auth", () => {
   });
 });
 
-describe("adapter-clerk.revoke", () => {
-  test("is idempotent on 404", async () => {
-    mockFetch(() => new Response("not found", { status: 404 }));
+describe("adapter-clerk.revoke (manual-assist)", () => {
+  test("succeeds when user confirms dashboard deletion", async () => {
+    const io = mockIO("", true);
     const secret: Secret = {
       id: "key_old",
       provider: "clerk",
       value: "sk_live_old",
-      metadata: { instance_id: "ins_x", key_id: "key_old" },
+      metadata: { instance_id: "ins_x", app_id: "app_123", key_id: "key_old" },
       createdAt: new Date().toISOString(),
     };
-    const r = await clerkAdapter.revoke(secret, mockCtx);
+    const r = await clerkAdapter.revoke(secret, mockCtx, { io });
     expect(r.ok).toBe(true);
+  });
+
+  test("fails when user declines confirmation", async () => {
+    const io = mockIO("", false);
+    const secret: Secret = {
+      id: "key_old",
+      provider: "clerk",
+      value: "sk_live_old",
+      metadata: { instance_id: "ins_x" },
+      createdAt: new Date().toISOString(),
+    };
+    const r = await clerkAdapter.revoke(secret, mockCtx, { io });
+    expect(r.ok).toBe(false);
+    expect(r.error?.code).toBe("unsupported");
   });
 });
 

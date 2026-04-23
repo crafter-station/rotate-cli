@@ -5,6 +5,7 @@ import type {
   AuthContext,
   OwnershipOptions,
   OwnershipResult,
+  PromptIO,
   RotationResult,
   RotationSpec,
   Secret,
@@ -31,6 +32,15 @@ export const clerkAdapter: Adapter = {
   name: "clerk",
   authRef: "clerk",
   authDefinition: clerkAuthDefinition,
+  // Clerk does not expose a supported BAPI/PLAPI endpoint to create
+  // additional instance Secret Keys programmatically. The dashboard flow
+  // at /~/api-keys is the only path. So we go manual-assist: open the
+  // browser at the right instance, ask the user to paste the new key,
+  // and propagate automatically to every vercel-env consumer.
+  //
+  // Preload + ownedBy stay online: they use PLAPI to enumerate apps
+  // for fingerprinting, which is fully supported.
+  mode: "manual-assist",
 
   async auth(): Promise<AuthContext> {
     return resolveRegisteredAuth("clerk");
@@ -52,9 +62,13 @@ export const clerkAdapter: Adapter = {
     // issue as 95 useless "unknown" verdicts).
     const knownFapiHosts = new Set<string>();
     const knownKids = new Set<string>();
-    // host → instance_id so create() can auto-resolve metadata without an
-    // extra API round-trip per rotation.
-    const hostToInstance = new Map<string, string>();
+    // host → { instance_id, app_id, environment_type } so manual-assist
+    // create() can build a deep-link to the right dashboard page AND so
+    // revoke() knows which app to point the user at.
+    const hostToInstance = new Map<
+      string,
+      { instanceId: string; appId?: string; environment?: string }
+    >();
 
     const res = await fetch(`${PLAPI_BASE}/v1/platform/applications`, {
       headers: { Authorization: `Bearer ${ctx.token}` },
@@ -89,7 +103,13 @@ export const clerkAdapter: Adapter = {
         if (decoded) {
           knownFapiHosts.add(decoded.host);
           pkList.push({ pk, host: decoded.host });
-          if (inst.instance_id) hostToInstance.set(decoded.host, inst.instance_id);
+          if (inst.instance_id) {
+            hostToInstance.set(decoded.host, {
+              instanceId: inst.instance_id,
+              appId: app.application_id,
+              environment: inst.environment_type,
+            });
+          }
         }
       }
     }
@@ -120,61 +140,130 @@ export const clerkAdapter: Adapter = {
     return { knownFapiHosts, knownKids, hostToInstance };
   },
 
-  async create(spec: RotationSpec, ctx: AuthContext): Promise<RotationResult<Secret>> {
-    const instanceId = spec.metadata.instance_id ?? resolveInstanceId(spec);
-    if (!instanceId) {
+  async create(spec: RotationSpec, _ctx: AuthContext): Promise<RotationResult<Secret>> {
+    const io = spec.io;
+    if (!io?.isInteractive) {
+      return {
+        ok: false,
+        error: makeError(
+          "unsupported",
+          "Clerk rotation is manual-assist — re-run with --manual-only from an interactive TTY so you can paste the new key",
+          "clerk",
+          { retryable: false },
+        ),
+      };
+    }
+    const location = resolveInstanceLocation(spec);
+    const dashboardUrl = buildDashboardUrl(location);
+    const envLabel = location?.environment ? `${location.environment} ` : "";
+    io.note(
+      [
+        "Clerk Secret Key rotation is manual-assist: Clerk does not expose a supported API to",
+        "programmatically create additional instance Secret Keys. The dashboard flow is the only path.",
+        "",
+        `Open: ${dashboardUrl}`,
+        `Target: ${spec.secretId} (${envLabel}instance)`,
+        "",
+        "Steps:",
+        `1. In the Clerk Dashboard, open the app above → API keys → + Add new key.`,
+        `2. Name the new key e.g. "rotate-cli-${Date.now().toString(36)}".`,
+        "3. Copy the new Secret Key value (sk_live_* / sk_test_*).",
+        "4. Paste it below. rotate-cli will propagate it to every vercel-env consumer automatically.",
+        "5. Leave the OLD key alive during the grace period — rotate will prompt you to delete it",
+        "   from the dashboard after consumers sync.",
+      ].join("\n"),
+    );
+    const value = (await io.promptSecret("Paste the new Clerk Secret Key")).trim();
+    if (!value) {
+      return {
+        ok: false,
+        error: makeError("invalid_spec", "pasted Clerk Secret Key was empty", "clerk"),
+      };
+    }
+    if (!/^sk_(live|test)_/.test(value)) {
       return {
         ok: false,
         error: makeError(
           "invalid_spec",
-          "metadata.instance_id is required (and auto-resolve via co-located CLERK_PUBLISHABLE_KEY + preload failed)",
+          "pasted value does not look like a Clerk Secret Key (expected sk_live_* or sk_test_*)",
           "clerk",
         ),
       };
     }
-    const res = await fetch(`${PLAPI_BASE}/v1/instances/${instanceId}/api_keys`, {
-      method: "POST",
-      headers: authHeaders(ctx),
-      body: JSON.stringify({ name: `rotate-cli-${Date.now()}` }),
-    });
-    if (!res.ok) return { ok: false, error: fromResponse(res, "create") };
-    const data = (await res.json()) as ClerkApiKey;
     return {
       ok: true,
       data: {
-        id: data.id,
+        id: spec.secretId,
         provider: "clerk",
-        value: data.secret,
-        metadata: { instance_id: data.instance_id, key_id: data.id },
-        createdAt: new Date((data.created_at ?? Date.now()) * 1000).toISOString(),
+        value,
+        metadata: {
+          ...spec.metadata,
+          manual_assist: "true",
+          ...(location?.instanceId ? { instance_id: location.instanceId } : {}),
+          ...(location?.appId ? { app_id: location.appId } : {}),
+          ...(location?.environment ? { environment: location.environment } : {}),
+        },
+        createdAt: new Date().toISOString(),
       },
     };
   },
 
   async verify(secret: Secret, _ctx: AuthContext): Promise<RotationResult<boolean>> {
-    // Verify the NEW key by calling /v1/me with it as bearer.
-    const res = await fetch(`${PLAPI_BASE}/v1/me`, {
+    // The new key is a BAPI secret key — /v1/me doesn't accept it (404).
+    // Use /v1/jwks instead which every BAPI key can fetch. That proves
+    // the pasted value is at least a live Clerk Secret Key pointing at
+    // some instance's FAPI.
+    const res = await fetch(`${PLAPI_BASE}/v1/jwks`, {
       headers: { Authorization: `Bearer ${secret.value}` },
     });
     if (!res.ok) return { ok: false, error: fromResponse(res, "verify") };
     return { ok: true, data: true };
   },
 
-  async revoke(secret: Secret, ctx: AuthContext): Promise<RotationResult<void>> {
-    const instanceId = secret.metadata.instance_id;
-    const keyId = secret.metadata.key_id ?? secret.id;
-    if (!instanceId) {
+  async revoke(
+    secret: Secret,
+    _ctx: AuthContext,
+    opts?: { io?: PromptIO },
+  ): Promise<RotationResult<void>> {
+    const io = opts?.io;
+    if (!io?.isInteractive) {
       return {
         ok: false,
-        error: makeError("invalid_spec", "metadata.instance_id missing", "clerk"),
+        error: makeError(
+          "unsupported",
+          "Clerk revoke is manual-assist — re-run with --manual-only from a TTY to confirm deletion",
+          "clerk",
+          { retryable: false },
+        ),
       };
     }
-    const res = await fetch(`${PLAPI_BASE}/v1/instances/${instanceId}/api_keys/${keyId}`, {
-      method: "DELETE",
-      headers: authHeaders(ctx),
+    const appId = secret.metadata.app_id;
+    const instanceId = secret.metadata.instance_id;
+    const environment = secret.metadata.environment;
+    const dashboardUrl = buildDashboardUrl(
+      appId && instanceId ? { appId, instanceId, environment } : undefined,
+    );
+    io.note(
+      [
+        "Clerk old key cleanup is manual-assist.",
+        "",
+        `Open: ${dashboardUrl}`,
+        `Target: ${secret.id}`,
+        "",
+        "Under Secret Keys, find the OLD key (not the one you just added) and delete it.",
+        "Clerk warns you if the key was used recently — check the Last used timestamp first.",
+        "Confirm only after the old key is gone.",
+      ].join("\n"),
+    );
+    const confirmed = await io.confirm("Confirm the old Clerk Secret Key has been deleted", {
+      initialValue: false,
     });
-    if (res.status === 404) return { ok: true, data: undefined }; // idempotent
-    if (!res.ok) return { ok: false, error: fromResponse(res, "revoke") };
+    if (!confirmed) {
+      return {
+        ok: false,
+        error: makeError("unsupported", "Clerk revoke was not confirmed", "clerk"),
+      };
+    }
     return { ok: true, data: undefined };
   },
 
@@ -403,32 +492,52 @@ function findPublishableKey(
   return undefined;
 }
 
+interface ClerkLocation {
+  instanceId: string;
+  appId?: string;
+  environment?: string;
+}
+
 /**
- * Auto-resolve metadata.instance_id from the rotation spec's context:
- *   1. spec.metadata.instance_id (explicit in config) — caller already handles this.
- *   2. spec.currentValue + co-located CLERK_PUBLISHABLE_KEY → decodeFapi → host
- *      → preload.hostToInstance → instance_id. Works without an extra PLAPI call
- *      per rotation because preloadOwnership already enumerated every instance
- *      the platform token can see.
- * Returns undefined when the sibling publishable key is missing or the host
- * is unknown to the admin — the caller should surface that as invalid_spec.
+ * Auto-resolve the Clerk dashboard location (app_id + instance_id) from the
+ * rotation spec's context. Uses the co-located CLERK_PUBLISHABLE_KEY to
+ * decode the FAPI host, then looks it up in the preload's hostToInstance
+ * map built by preloadOwnership(). Returns undefined when either is
+ * missing — the caller falls back to the generic `/~/api-keys` link.
  */
-function resolveInstanceId(spec: RotationSpec): string | undefined {
+function resolveInstanceLocation(spec: RotationSpec): ClerkLocation | undefined {
   const pk = findPublishableKey(spec.currentValue ?? "", spec.coLocatedVars);
   if (!pk) return undefined;
   const decoded = decodeFapi(pk);
   if (!decoded) return undefined;
   const map = spec.preload?.hostToInstance;
-  if (map instanceof Map) {
-    return typeof map.get(decoded.host) === "string"
-      ? (map.get(decoded.host) as string)
-      : undefined;
-  }
-  if (map && typeof map === "object") {
-    const value = (map as Record<string, unknown>)[decoded.host];
-    return typeof value === "string" ? value : undefined;
+  const get = (key: string): unknown =>
+    map instanceof Map
+      ? map.get(key)
+      : map && typeof map === "object"
+        ? (map as Record<string, unknown>)[key]
+        : undefined;
+  const raw = get(decoded.host);
+  // Back-compat: earlier preload shape stored just the instance_id string.
+  if (typeof raw === "string") return { instanceId: raw };
+  if (raw && typeof raw === "object") {
+    const obj = raw as { instanceId?: string; appId?: string; environment?: string };
+    if (obj.instanceId)
+      return { instanceId: obj.instanceId, appId: obj.appId, environment: obj.environment };
   }
   return undefined;
+}
+
+/**
+ * Build the Clerk dashboard URL the user should open. When we know both
+ * app_id and instance_id, deep-link straight to the api-keys page for that
+ * environment. Otherwise fall back to the app-wide "last-active" shortcut.
+ */
+function buildDashboardUrl(location: ClerkLocation | undefined): string {
+  if (location?.appId && location.instanceId) {
+    return `https://dashboard.clerk.com/apps/${location.appId}/instances/${location.instanceId}/api-keys`;
+  }
+  return "https://dashboard.clerk.com/~/api-keys";
 }
 
 function decodeFapi(pk: string): { host: string; environment: "live" | "test" } | undefined {
