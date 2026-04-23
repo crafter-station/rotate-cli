@@ -191,18 +191,40 @@ export async function applyRotation(
   );
   if (!createResult.ok || !createResult.data) {
     const err = createResult.error ?? makeError("provider_error", "create failed", secret.adapter);
-    // Missing-metadata errors are a config gap, not a provider failure —
-    // surface them as "skipped" so the user sees them in yellow (needs action)
-    // instead of red (something broke). The adapter returned invalid_spec
-    // with a "metadata.X is required" message, which means the scan cache
-    // doesn't have enough info for this adapter. Real fix is per-adapter
-    // auto-metadata resolution; until then, skip cleanly.
-    if (err.code === "invalid_spec" && /^metadata\.\w+ is required/i.test(err.message)) {
+    // Config-gap errors are not provider failures. Three sub-cases:
+    //
+    //  1) missing-metadata: adapter complained "metadata.X is required" (or
+    //     "metadata.X and metadata.Y are required"). Scan cache doesn't have
+    //     enough info for this adapter. Real fix is per-adapter auto-resolve.
+    //  2) orphaned-resource: adapter returned 404 from create. The env var
+    //     still exists in Vercel but the upstream resource was deleted. The
+    //     user needs to manually remove the stale env var, not rotate it.
+    //  3) auth-failed-narrow: adapter returned 401/403 from create but the
+    //     preload succeeded. Usually means the admin token can see the
+    //     resource but doesn't have permission to mutate it (most common
+    //     when the env var points at a resource in another account — the
+    //     ownership check should have caught it but missed).
+    //
+    // All three surface as skipped with a distinct reason so the user can
+    // act on them in batch rather than chase red errors one by one.
+    if (
+      err.code === "invalid_spec" &&
+      /metadata\.\w+[\s\S]*\b(is|are)\s+required/i.test(err.message)
+    ) {
       rotation.status = "skipped";
-      rotation.skipReason = {
-        kind: "adapter-missing-metadata",
-        evidence: err.message,
-      };
+      rotation.skipReason = { kind: "adapter-missing-metadata", evidence: err.message };
+      saveCheckpoint({
+        rotationId: rotation.id,
+        rotation,
+        stepCompleted: "none",
+        savedAt: new Date().toISOString(),
+      });
+      audit(opts.auditLog, rotation);
+      return { rotation, envelopeStatus: "skipped" };
+    }
+    if (err.code === "not_found") {
+      rotation.status = "skipped";
+      rotation.skipReason = { kind: "orphaned-resource", evidence: err.message };
       saveCheckpoint({
         rotationId: rotation.id,
         rotation,

@@ -305,6 +305,7 @@ export function renderApply(
       "ownership-self-member-only",
       "ownership-current-value-unavailable",
       "adapter-missing-metadata",
+      "orphaned-resource",
     ];
     const sortedReasons = Object.keys(byReason).sort((a, b) => {
       const ai = reasonOrder.indexOf(a);
@@ -323,6 +324,7 @@ export function renderApply(
           "ownership-unknown-skipped": "ownership unknown",
           "ownership-current-value-unavailable": "no current value",
           "adapter-missing-metadata": "needs metadata",
+          "orphaned-resource": "orphaned resource",
         }[reason] ?? reason;
       print(`  ${pc.yellow("○")} ${label.padEnd(22)} ${pc.dim(`× ${group.length}`)}`);
     }

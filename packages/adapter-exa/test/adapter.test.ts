@@ -32,76 +32,42 @@ afterEach(() => {
 
 const mockCtx: AuthContext = { kind: "env", varName: "EXA_API_KEY", token: "exa_old" };
 
-describe("adapter-exa.create", () => {
-  test("calls Exa API and returns Secret when plaintext key is present", async () => {
-    mockFetch(
-      () =>
-        new Response(
-          JSON.stringify({
-            apiKey: {
-              id: "key_new",
-              name: "Production",
-              key: "exa_new",
-              rateLimit: 1000,
-              teamId: "team_1",
-              createdAt: "2026-01-01T00:00:00.000Z",
-            },
-          }),
-          { status: 200 },
-        ),
-    );
+function mockIO(pasted: string, confirm = true): import("@rotate/core/types").PromptIO {
+  return {
+    isInteractive: true,
+    async promptSecret() {
+      return pasted;
+    },
+    async confirm() {
+      return confirm;
+    },
+    async select<T>() {
+      return undefined as unknown as T;
+    },
+    note(_: string) {},
+    async close() {},
+  } as unknown as import("@rotate/core/types").PromptIO;
+}
 
+describe("adapter-exa.create (manual-assist)", () => {
+  test("prompts for new key and returns it", async () => {
+    const io = mockIO("exa_NEWPASTE");
     const result = await adapterExaAdapter.create(
-      {
-        secretId: "main",
-        adapter: "exa",
-        metadata: { name: "Production", rateLimit: "1000" },
-      },
+      { secretId: "main", adapter: "exa", metadata: {}, io },
       mockCtx,
     );
-
     expect(result.ok).toBe(true);
-    expect(result.data?.value).toBe("exa_new");
-    expect(result.data?.metadata.key_id).toBe("key_new");
-    expect(result.data?.metadata.team_id).toBe("team_1");
-    expect(calls[0]?.url).toBe("https://admin-api.exa.ai/team-management/api-keys");
-    expect(calls[0]?.init?.method).toBe("POST");
-    expect((calls[0]?.init?.headers as Record<string, string>)?.["x-api-key"]).toBe("exa_old");
-    expect(calls[0]?.init?.body).toBe(JSON.stringify({ name: "Production", rateLimit: 1000 }));
+    expect(result.data?.value).toBe("exa_NEWPASTE");
+    expect(result.data?.metadata.manual_assist).toBe("true");
   });
 
-  test("returns unsupported when Exa create returns only metadata", async () => {
-    mockFetch(
-      () =>
-        new Response(
-          JSON.stringify({
-            apiKey: {
-              id: "key_new",
-              name: "Production",
-              teamId: "team_1",
-            },
-          }),
-          { status: 200 },
-        ),
-    );
-
-    const result = await adapterExaAdapter.create(
-      { secretId: "main", adapter: "exa", metadata: { name: "Production" } },
-      mockCtx,
-    );
-
-    expect(result.ok).toBe(false);
-    expect(result.error?.code).toBe("unsupported");
-  });
-
-  test("401 becomes auth_failed", async () => {
-    mockFetch(() => new Response("unauthorized", { status: 401 }));
+  test("without interactive IO returns unsupported", async () => {
     const result = await adapterExaAdapter.create(
       { secretId: "main", adapter: "exa", metadata: {} },
       mockCtx,
     );
     expect(result.ok).toBe(false);
-    expect(result.error?.code).toBe("auth_failed");
+    expect(result.error?.code).toBe("unsupported");
   });
 });
 

@@ -53,7 +53,12 @@ export const tursoAdapter: Adapter = {
   },
 
   async create(spec: RotationSpec, ctx: AuthContext): Promise<RotationResult<Secret>> {
-    const validation = validateMetadata(spec.metadata);
+    // Merge spec.metadata with auto-resolved org/db parsed from the
+    // current connection string (libsql://{db}-{org}.turso.io). Explicit
+    // config still wins.
+    const resolved = resolveTursoMetadata(spec);
+    const merged = { ...resolved, ...spec.metadata };
+    const validation = validateMetadata(merged);
     if (validation.error) return { ok: false, error: validation.error };
 
     const { authorization, database, expiration, organization } = validation.metadata;
@@ -259,6 +264,51 @@ async function request(url: string, init: RequestInit): Promise<Response | Error
     return await fetch(url, init);
   } catch (cause) {
     return cause instanceof Error ? cause : new Error(String(cause));
+  }
+}
+
+/**
+ * Parse a Turso connection string (libsql://{db}-{org}.turso.io) and
+ * pick up sibling env vars (TURSO_DATABASE_URL) to auto-populate
+ * metadata.organization + metadata.database. The hostname format is
+ * `{database}-{organization}.turso.io` where {database} may itself
+ * contain hyphens — split on the LAST hyphen before `.turso.io`.
+ */
+function resolveTursoMetadata(spec: RotationSpec): Record<string, string> {
+  const out: Record<string, string> = {};
+  const candidates = [
+    spec.currentValue,
+    spec.coLocatedVars?.TURSO_DATABASE_URL,
+    spec.coLocatedVars?.DATABASE_URL,
+  ].filter((v): v is string => typeof v === "string" && v.length > 0);
+  for (const raw of candidates) {
+    const parsed = parseTursoUrlForMetadata(raw);
+    if (parsed) {
+      if (!out.organization && parsed.organization) out.organization = parsed.organization;
+      if (!out.database && parsed.database) out.database = parsed.database;
+      if (!out.hostname && parsed.hostname) out.hostname = parsed.hostname;
+    }
+  }
+  return out;
+}
+
+function parseTursoUrlForMetadata(
+  raw: string,
+): { database: string; organization: string; hostname: string } | undefined {
+  const trimmed = raw.trim();
+  if (!/^libsql:\/\//i.test(trimmed)) return undefined;
+  try {
+    const url = new URL(trimmed);
+    const hostname = url.hostname.toLowerCase();
+    // Match `{db}-{org}.turso.io`. Organization is the FINAL dash-segment
+    // before `.turso.io`. Database is everything before it.
+    const match = hostname.match(/^([a-z0-9-]+)-([a-z0-9]+)\.turso\.io$/);
+    if (!match) return undefined;
+    const [, database, organization] = match;
+    if (!database || !organization) return undefined;
+    return { database, organization, hostname };
+  } catch {
+    return undefined;
   }
 }
 

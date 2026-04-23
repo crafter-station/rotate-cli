@@ -6,6 +6,7 @@ import type {
   OwnershipOptions,
   OwnershipPreload,
   OwnershipResult,
+  PromptIO,
   RotationResult,
   RotationSpec,
   Secret,
@@ -55,81 +56,59 @@ export const adapterExaAdapter: Adapter = {
   name: EXA_PROVIDER,
   authRef: EXA_PROVIDER,
   authDefinition: exaAuthDefinition,
-  mode: "auto",
+  // Exa's POST /team-management/api-keys creates a key but NEVER returns
+  // the plaintext value — it's visible only once in the dashboard at
+  // creation time. That makes auto-rotation impossible. Go manual-assist:
+  // deep-link to the dashboard, prompt for the new key, propagate.
+  mode: "manual-assist",
 
   async auth(): Promise<AuthContext> {
     return resolveRegisteredAuth(EXA_PROVIDER);
   },
 
-  async create(spec: RotationSpec, ctx: AuthContext): Promise<RotationResult<Secret>> {
-    const name = apiKeyName(spec);
-    const rateLimit = parseRateLimit(spec.metadata.rateLimit ?? spec.metadata.rate_limit);
-    if ((spec.metadata.rateLimit ?? spec.metadata.rate_limit) && rateLimit === undefined) {
-      return {
-        ok: false,
-        error: makeError(
-          "invalid_spec",
-          "metadata.rateLimit must be a positive integer",
-          EXA_PROVIDER,
-        ),
-      };
-    }
-
-    const body: { name: string; rateLimit?: number } = { name };
-    if (rateLimit !== undefined) body.rateLimit = rateLimit;
-
-    const res = await request(EXA_API_KEYS_BASE, {
-      method: "POST",
-      headers: authHeaders(ctx.token),
-      body: JSON.stringify(body),
-    });
-    if (res instanceof Error) return { ok: false, error: networkError(res) };
-    if (!res.ok) return { ok: false, error: fromResponse(res, "create") };
-
-    const data = (await res.json()) as ExaCreateApiKeyResponse;
-    const apiKey = data.apiKey ?? {};
-    const keyId = apiKey.id;
-    if (!keyId) {
-      return {
-        ok: false,
-        error: makeError(
-          "provider_error",
-          "exa create: response missing api key id",
-          EXA_PROVIDER,
-          {
-            retryable: false,
-          },
-        ),
-      };
-    }
-
-    const value = plaintextKey(data);
-    if (!value) {
+  async create(spec: RotationSpec, _ctx: AuthContext): Promise<RotationResult<Secret>> {
+    const io = spec.io;
+    if (!io?.isInteractive) {
       return {
         ok: false,
         error: makeError(
           "unsupported",
-          "exa create returned only key metadata; automated rotation requires a plaintext API key value",
+          "Exa rotation is manual-assist — re-run with --manual-only from an interactive TTY",
           EXA_PROVIDER,
           { retryable: false },
         ),
       };
     }
-
+    io.note(
+      [
+        "Exa API key rotation is manual-assist: the REST endpoint returns only key metadata,",
+        "never the plaintext value. You need to copy it from the dashboard at creation time.",
+        "",
+        "Open: https://dashboard.exa.ai/api-keys",
+        `Target: ${spec.secretId}`,
+        "",
+        "Steps:",
+        "1. Create a new API key with a descriptive name.",
+        "2. Copy the new key value (only shown once).",
+        "3. Paste it below — rotate-cli propagates to every vercel-env consumer.",
+        "4. After the grace period, delete the OLD key from the same dashboard page.",
+      ].join("\n"),
+    );
+    const value = (await io.promptSecret("Paste the new Exa API key")).trim();
+    if (!value) {
+      return {
+        ok: false,
+        error: makeError("invalid_spec", "pasted Exa API key was empty", EXA_PROVIDER),
+      };
+    }
     return {
       ok: true,
       data: {
-        id: keyId,
+        id: spec.secretId,
         provider: EXA_PROVIDER,
         value,
-        metadata: compactMetadata({
-          key_id: keyId,
-          name: apiKey.name ?? name,
-          rate_limit: numberMetadata(apiKey.rateLimit ?? rateLimit),
-          team_id: apiKey.teamId,
-          user_id: apiKey.userId,
-        }),
-        createdAt: apiKey.createdAt ?? new Date().toISOString(),
+        metadata: { ...spec.metadata, manual_assist: "true" },
+        createdAt: new Date().toISOString(),
       },
     };
   },

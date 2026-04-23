@@ -81,8 +81,8 @@ describe("adapter-fal.create", () => {
 });
 
 describe("adapter-fal.verify", () => {
-  test("calls models usage with new secret", async () => {
-    mockFetch(() => new Response(JSON.stringify({ total_requests: 0 }), { status: 200 }));
+  test("calls /v1/models with new secret", async () => {
+    mockFetch(() => new Response(JSON.stringify({ models: [] }), { status: 200 }));
     const secret: Secret = {
       id: "key_new",
       provider: "fal-ai",
@@ -92,7 +92,7 @@ describe("adapter-fal.verify", () => {
     };
     const r = await falAdapter.verify(secret, mockCtx);
     expect(r.ok).toBe(true);
-    expect(calls[0]?.url).toMatch(/\/v1\/models\/usage$/);
+    expect(calls[0]?.url).toMatch(/\/v1\/models$/);
     expect((calls[0]?.init?.headers as Record<string, string>)?.Authorization).toBe(
       "Key key_new:sk_live_new",
     );

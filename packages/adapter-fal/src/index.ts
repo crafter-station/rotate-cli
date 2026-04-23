@@ -100,7 +100,10 @@ export const falAdapter: Adapter = {
   },
 
   async verify(secret: Secret, _ctx: AuthContext): Promise<RotationResult<boolean>> {
-    const res = await request(`${FAL_API_BASE}/models/usage`, {
+    // /v1/models/usage requires the ADMIN scope — the NEW key is API-scoped
+    // and would 403 here ("Admin API key authentication required"). Use
+    // /v1/models which every API key can read.
+    const res = await request(`${FAL_API_BASE}/models`, {
       headers: authHeaders(secret.value),
     });
     if (res instanceof Error) return { ok: false, error: networkError(res) };
