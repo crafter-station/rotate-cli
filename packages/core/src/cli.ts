@@ -511,6 +511,10 @@ export async function runCli(argv: string[]): Promise<void> {
       "--manual-only",
       "rotate only manual-assist adapters; pauses for dashboard steps (requires TTY)",
     )
+    .option(
+      "-v, --verbose",
+      "show every rotated/skipped secret individually (default: grouped summary)",
+    )
     .action(
       async (
         idsArg: string[] | undefined,
@@ -529,6 +533,7 @@ export async function runCli(argv: string[]): Promise<void> {
           confirmBulk?: boolean;
           autoOnly?: boolean;
           manualOnly?: boolean;
+          verbose?: boolean;
         },
       ) => {
         const ids = idsArg ?? [];
@@ -931,7 +936,9 @@ export async function runCli(argv: string[]): Promise<void> {
           ownership: ownershipSummary,
         };
         if (applyPretty) {
-          renderApply(successfulRotations, skipped, runSummary, [...nextActions, ...skipActions]);
+          renderApply(successfulRotations, skipped, runSummary, [...nextActions, ...skipActions], {
+            verbose: opts.verbose,
+          });
           process.exit(
             anyError ? EXIT.PROVIDER_ERROR : anyPartial ? EXIT.IN_GRACE_WARNING : EXIT.OK,
           );

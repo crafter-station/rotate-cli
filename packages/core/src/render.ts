@@ -255,60 +255,166 @@ export interface ApplyRunSummary {
   ownership?: OwnershipSummary;
 }
 
+export interface RenderApplyOptions {
+  /** Unroll every rotated/skipped row. Default: false — summary view only. */
+  verbose?: boolean;
+  /** Cap on how many rows per bucket the summary view prints. Default 5. */
+  summaryLimit?: number;
+}
+
 export function renderApply(
   rotations: RotationResult[],
   skipped: SkipEntry[],
   summary: ApplyRunSummary,
   nextActions: string[],
+  opts: RenderApplyOptions = {},
 ): void {
+  const verbose = opts.verbose ?? false;
+  const limit = opts.summaryLimit ?? 5;
+  const total = summary.rotated + summary.skipped + summary.failed;
+
   print(pc.bold("rotate-cli apply"));
   print("");
 
-  if (rotations.length > 0) {
-    print(`${pc.green("✓")} ${rotations.length} secret(s) rotated`);
-    for (const r of rotations) {
-      print(`  ${pc.green("●")} ${pc.bold(r.secret_id)} ${pc.dim(r.rotation_id ?? "")}`);
-      if (r.grace_period_ends) {
-        print(`      ${pc.dim(`in grace until ${r.grace_period_ends.slice(11, 16)} UTC`)}`);
-      }
-      for (const c of r.consumers ?? []) {
-        const glyph = c.status === "synced" ? pc.green("✓") : pc.yellow("…");
-        print(`      ${glyph} ${c.target.type} ${pc.dim(c.target.params.var_name ?? "")}`);
-      }
+  // Summary line is the headline. Humans see one number per bucket, colored.
+  const headlineParts: string[] = [];
+  if (summary.rotated > 0) headlineParts.push(pc.green(`${summary.rotated} rotated`));
+  if (summary.skipped > 0) headlineParts.push(pc.yellow(`${summary.skipped} skipped`));
+  if (summary.failed > 0) headlineParts.push(pc.red(`${summary.failed} failed`));
+  if (total === 0) headlineParts.push(pc.dim("nothing to do"));
+  print(`${headlineParts.join("  ·  ")}  ${pc.dim(`(${total} total)`)}`);
+
+  // Break the skipped bucket down by reason. Most rotations skip for only
+  // 2-3 distinct reasons (ownership-other dominates); this lets the user
+  // see at a glance what kind of manual follow-up they need.
+  if (summary.skipped > 0) {
+    print("");
+    const byReason = groupBy(skipped, (s) => s.reason ?? "unknown");
+    const reasonOrder = [
+      "ownership-other",
+      "ownership-unknown-skipped",
+      "ownership-self-member-only",
+      "ownership-current-value-unavailable",
+      "adapter-missing-metadata",
+    ];
+    const sortedReasons = Object.keys(byReason).sort((a, b) => {
+      const ai = reasonOrder.indexOf(a);
+      const bi = reasonOrder.indexOf(b);
+      if (ai === -1 && bi === -1) return a.localeCompare(b);
+      if (ai === -1) return 1;
+      if (bi === -1) return -1;
+      return ai - bi;
+    });
+    for (const reason of sortedReasons) {
+      const group = byReason[reason]!;
+      const label =
+        {
+          "ownership-other": "not yours",
+          "ownership-self-member-only": "not an admin",
+          "ownership-unknown-skipped": "ownership unknown",
+          "ownership-current-value-unavailable": "no current value",
+          "adapter-missing-metadata": "needs metadata",
+        }[reason] ?? reason;
+      print(`  ${pc.yellow("○")} ${label.padEnd(22)} ${pc.dim(`× ${group.length}`)}`);
     }
   }
 
-  if (skipped.length > 0) {
+  // Provider breakdown for rotated secrets. One line per provider.
+  if (summary.rotated > 0) {
     print("");
-    print(`${pc.yellow("⚠")} ${skipped.length} secret(s) skipped`);
+    const byProvider = groupBy(rotations, (r) => providerOf(r.secret_id));
+    const sorted = Object.keys(byProvider).sort();
+    for (const provider of sorted) {
+      const group = byProvider[provider]!;
+      const inGrace = group.filter((r) => r.grace_period_ends).length;
+      const graceSuffix = inGrace > 0 ? pc.dim(` (${inGrace} in grace)`) : "";
+      print(
+        `  ${pc.green("✓")} ${provider.padEnd(22)} ${pc.dim(`× ${group.length}`)}${graceSuffix}`,
+      );
+    }
+  }
+
+  // Verbose mode (or when the total is tiny): show each row. Otherwise
+  // just the first N per bucket as a sample.
+  const showAll = verbose || total <= limit * 2;
+
+  if (rotations.length > 0 && (showAll || verbose)) {
+    print("");
+    print(pc.dim(`Rotated ${rotations.length}:`));
+    const rows = showAll ? rotations : rotations.slice(0, limit);
+    for (const r of rows) {
+      const graceBit = r.grace_period_ends
+        ? pc.dim(` · grace ${r.grace_period_ends.slice(11, 16)}Z`)
+        : "";
+      print(`  ${pc.green("●")} ${r.secret_id}${graceBit}`);
+    }
+    if (!showAll && rotations.length > limit) {
+      print(pc.dim(`    … +${rotations.length - limit} more (rerun with --verbose to see all)`));
+    }
+  }
+
+  if (skipped.length > 0 && verbose) {
+    print("");
+    print(pc.dim(`Skipped ${skipped.length}:`));
     for (const s of skipped) {
       const kindLabel =
         {
           "ownership-other": pc.red("other"),
-          "ownership-self-member-only": pc.yellow("self (not-admin)"),
+          "ownership-self-member-only": pc.yellow("self(member)"),
           "ownership-unknown-skipped": pc.yellow("unknown"),
           "ownership-current-value-unavailable": pc.dim("no-current-value"),
           "adapter-missing-metadata": pc.yellow("needs-metadata"),
         }[s.reason ?? ""] ?? pc.dim(s.reason ?? "");
-      print(`  ${pc.yellow("○")} ${pc.bold(s.secret_id)} ${kindLabel}`);
-      if (s.evidence) print(`      ${pc.dim(truncate(s.evidence, 70))}`);
+      print(`  ${pc.yellow("○")} ${s.secret_id} ${kindLabel}`);
+      if (s.evidence) print(`      ${pc.dim(truncate(s.evidence, 80))}`);
     }
   }
-
-  print("");
-  const parts: string[] = [];
-  if (summary.rotated > 0) parts.push(`${pc.green(String(summary.rotated))} rotated`);
-  if (summary.skipped > 0) parts.push(`${pc.yellow(String(summary.skipped))} skipped`);
-  if (summary.failed > 0) parts.push(`${pc.red(String(summary.failed))} failed`);
-  if (parts.length > 0) print(`Summary: ${parts.join(", ")}`);
 
   if (nextActions.length > 0) {
     print("");
     print(pc.dim("Next:"));
-    for (const a of nextActions) {
-      print(`  ${pc.cyan("→")} ${a}`);
+    const shown = verbose ? nextActions : nextActions.slice(0, 4);
+    for (const a of shown) {
+      // nextActions can carry long comma-separated secret lists for the
+      // "belong to another account" hint. Collapse to the first line + count.
+      print(`  ${pc.cyan("→")} ${truncate(a, 140)}`);
+    }
+    if (!verbose && nextActions.length > 4) {
+      print(pc.dim(`    … +${nextActions.length - 4} more hint(s) (--verbose for all)`));
     }
   }
+}
+
+function groupBy<T>(items: T[], key: (t: T) => string): Record<string, T[]> {
+  const out: Record<string, T[]> = {};
+  for (const item of items) {
+    const k = key(item);
+    (out[k] ??= []).push(item);
+  }
+  return out;
+}
+
+function providerOf(secretId: string): string {
+  // secret_id format is `{adapter}-{project}-{VAR_NAME}`. Take the adapter
+  // part (may itself contain hyphens: "neon-connection", "vercel-ai-gateway").
+  // Heuristic: match against known multi-word adapter prefixes first, else
+  // take everything before the first `-`.
+  const knownPrefixes = [
+    "neon-connection",
+    "vercel-ai-gateway",
+    "vercel-blob",
+    "vercel-kv",
+    "vercel-token",
+    "local-random",
+    "trigger-dev",
+    "github-token",
+    "fal-ai",
+  ];
+  for (const prefix of knownPrefixes) {
+    if (secretId.startsWith(`${prefix}-`)) return prefix;
+  }
+  const dash = secretId.indexOf("-");
+  return dash === -1 ? secretId : secretId.slice(0, dash);
 }
 
 // ---------------------------------------------------------------------------
