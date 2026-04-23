@@ -82,11 +82,15 @@ export const upstashAdapter: Adapter = {
   },
 
   async create(spec: RotationSpec, ctx: AuthContext): Promise<RotationResult<Secret>> {
-    const databaseId = spec.metadata.database_id;
+    const databaseId = spec.metadata.database_id ?? resolveDatabaseId(spec);
     if (!databaseId) {
       return {
         ok: false,
-        error: makeError("invalid_spec", "metadata.database_id is required", UPSTASH_PROVIDER),
+        error: makeError(
+          "invalid_spec",
+          "metadata.database_id is required (and auto-resolve from current value / co-located URL failed)",
+          UPSTASH_PROVIDER,
+        ),
       };
     }
 
@@ -257,7 +261,7 @@ export const upstashAdapter: Adapter = {
             evidence:
               indexSize > 0
                 ? `REST token did not match any of the ${indexSize} Upstash Redis tokens visible to the authenticated admin — likely owned by another account`
-                : `authenticated admin has 0 Upstash Redis DBs, so this REST token belongs to another account`,
+                : "authenticated admin has 0 Upstash Redis DBs, so this REST token belongs to another account",
             strategy: "list-match",
           };
         }
@@ -515,13 +519,23 @@ function ownershipEvidenceForError(code: string): string {
 }
 
 function looksLikeUpstashRestUrl(value: string): boolean {
-  return /^https?:\/\/[a-z]+-[a-z]+-\d+\.upstash\.io\b/i.test(value);
+  return (
+    /^https?:\/\/[a-z]+-[a-z]+-\d+\.upstash\.io\b/i.test(value) ||
+    /^https?:\/\/[a-z]+-[a-z]+-\d+\.kv\.vercel-storage\.com\b/i.test(value)
+  );
 }
 
 function endpointFromRestUrl(value: string | undefined): string | undefined {
   if (!value) return undefined;
-  const match = value.match(/^https?:\/\/([a-z]+-[a-z]+-\d+)\.upstash\.io\b/i);
-  return match?.[1] ? `${match[1].toLowerCase()}.upstash.io` : undefined;
+  const upstashMatch = value.match(/^https?:\/\/([a-z]+-[a-z]+-\d+)\.upstash\.io\b/i);
+  if (upstashMatch?.[1]) return `${upstashMatch[1].toLowerCase()}.upstash.io`;
+  // Vercel KV stores still advertise `*.kv.vercel-storage.com` even after the
+  // Dec 2024 Upstash migration. The subdomain slug is the same as the
+  // Upstash `endpoint` field, so strip the Vercel host and re-anchor on
+  // `.upstash.io` to match preload.dbByEndpoint.
+  const vercelMatch = value.match(/^https?:\/\/([a-z]+-[a-z]+-\d+)\.kv\.vercel-storage\.com\b/i);
+  if (vercelMatch?.[1]) return `${vercelMatch[1].toLowerCase()}.upstash.io`;
+  return undefined;
 }
 
 function looksLikeRedisUrl(value: string): boolean {
@@ -538,6 +552,60 @@ function normalizeEndpoint(endpoint: string | undefined): string | undefined {
   if (!endpoint) return undefined;
   const match = endpoint.match(/^([a-z]+-[a-z]+-\d+)\.upstash\.io$/i);
   return match?.[1] ? `${match[1].toLowerCase()}.upstash.io` : undefined;
+}
+
+/**
+ * Auto-resolve metadata.database_id from the rotation spec:
+ *  1. current value is a REST URL (KV_REST_API_URL) → parse → lookup endpoint
+ *  2. current value is a REST token (UPSTASH_REDIS_REST_TOKEN / KV_REST_API_TOKEN)
+ *     → sha256 → lookup preload.tokenHashToEndpoint → endpoint → database_id
+ *  3. co-located vars provide the URL sibling
+ * Returns undefined when nothing matches.
+ */
+function resolveDatabaseId(spec: RotationSpec): string | undefined {
+  const preload = spec.preload as UpstashOwnershipPreload | undefined;
+  if (!preload) return undefined;
+  const dbByEndpoint = preload.dbByEndpoint ?? {};
+  const tokenHashToEndpoint = preload.tokenHashToEndpoint ?? {};
+
+  const tryEndpoint = (endpoint: string | undefined): string | undefined => {
+    if (!endpoint) return undefined;
+    const db = dbByEndpoint[endpoint];
+    return db?.id;
+  };
+
+  const current = spec.currentValue?.trim();
+  if (current) {
+    // Case 1: the value is a URL pointing at the database host.
+    if (looksLikeUpstashRestUrl(current)) {
+      const id = tryEndpoint(endpointFromRestUrl(current));
+      if (id) return id;
+    }
+    if (looksLikeRedisUrl(current)) {
+      const id = tryEndpoint(endpointFromRedisUrl(current));
+      if (id) return id;
+    }
+    // Case 2: the value is a REST token. Preload hashed every known token
+    // during list — if the hashes match we get the endpoint → database_id.
+    if (looksLikeUpstashRestToken(current)) {
+      const endpoint = tokenHashToEndpoint[sha256(current)];
+      const id = tryEndpoint(endpoint);
+      if (id) return id;
+    }
+  }
+
+  // Case 3: sibling env vars from the same Vercel project expose the URL
+  // even when the rotating secret is only the token.
+  const siblings = spec.coLocatedVars ?? {};
+  for (const name of ["KV_REST_API_URL", "UPSTASH_REDIS_REST_URL", "KV_URL", "REDIS_URL"]) {
+    const value = siblings[name];
+    if (!value) continue;
+    const endpoint = endpointFromRestUrl(value) ?? endpointFromRedisUrl(value);
+    const id = tryEndpoint(endpoint);
+    if (id) return id;
+  }
+
+  return undefined;
 }
 
 function looksLikeUpstashRestToken(value: string): boolean {

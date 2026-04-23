@@ -126,14 +126,18 @@ export const neonConnectionAdapter: Adapter = {
   },
 
   async create(spec: RotationSpec, ctx: AuthContext): Promise<RotationResult<Secret>> {
-    const validation = validateMetadata(spec.metadata);
+    // Merge explicit metadata with anything we can auto-resolve from the
+    // current connection string + preload index. Explicit config wins.
+    const resolved = resolveNeonMetadata(spec);
+    const metadata: Record<string, string> = { ...resolved, ...spec.metadata };
+    const validation = validateMetadata(metadata);
     if (validation) return { ok: false, error: validation };
 
-    const projectId = spec.metadata.project_id as string;
-    const branchId = spec.metadata.branch_id ?? DEFAULT_BRANCH_ID;
-    const roleName = spec.metadata.role_name as string;
-    const databaseName = spec.metadata.database_name as string;
-    const host = spec.metadata.host as string;
+    const projectId = metadata.project_id as string;
+    const branchId = metadata.branch_id ?? DEFAULT_BRANCH_ID;
+    const roleName = metadata.role_name as string;
+    const databaseName = metadata.database_name as string;
+    const host = metadata.host as string;
 
     const res = await request(
       `${NEON_BASE}/projects/${encodeURIComponent(projectId)}/branches/${encodeURIComponent(
@@ -176,13 +180,13 @@ export const neonConnectionAdapter: Adapter = {
           role_name: roleName,
           database_name: databaseName,
           host,
-          pooled_host: spec.metadata.pooled_host,
-          unpooled_host: spec.metadata.unpooled_host,
-          pooled_connection_string: spec.metadata.pooled_host
-            ? connectionString(roleName, password, spec.metadata.pooled_host, databaseName)
+          pooled_host: metadata.pooled_host,
+          unpooled_host: metadata.unpooled_host,
+          pooled_connection_string: metadata.pooled_host
+            ? connectionString(roleName, password, metadata.pooled_host, databaseName)
             : undefined,
-          unpooled_connection_string: spec.metadata.unpooled_host
-            ? connectionString(roleName, password, spec.metadata.unpooled_host, databaseName)
+          unpooled_connection_string: metadata.unpooled_host
+            ? connectionString(roleName, password, metadata.unpooled_host, databaseName)
             : undefined,
         }),
         createdAt: new Date().toISOString(),
@@ -447,6 +451,73 @@ function networkError(cause: Error) {
       cause,
     },
   );
+}
+
+/**
+ * Parse a postgres connection string + look up the preload index to fill in
+ * every metadata field create() needs: project_id, role_name, database_name,
+ * host, and (when the pooled/unpooled variant lives in a co-located env var)
+ * pooled_host/unpooled_host. Explicit spec.metadata still wins.
+ *
+ * Returns an empty object when the currentValue isn't a Neon postgres URL or
+ * the endpoint isn't in the preload — the caller then falls back to the
+ * original "metadata.X is required" error.
+ */
+function resolveNeonMetadata(spec: RotationSpec): Record<string, string> {
+  const out: Record<string, string> = {};
+  const raw = spec.currentValue?.trim();
+  if (!raw) return out;
+
+  const parsed = parseConnectionString(raw);
+  if (!parsed) return out;
+
+  const { roleName, databaseName, host } = parsed;
+  if (roleName) out.role_name = roleName;
+  if (databaseName) out.database_name = databaseName;
+  if (host) out.host = host;
+
+  const endpointId = extractEndpointId(raw);
+  if (endpointId) {
+    const preload = spec.preload;
+    const hit = preload ? lookupEndpoint(preload.endpointToProject, endpointId) : undefined;
+    if (hit?.projectId) out.project_id = hit.projectId;
+  }
+
+  // Discover pooled/unpooled variants from co-located env vars. Neon projects
+  // typically expose both POSTGRES_URL and POSTGRES_URL_NON_POOLING; the
+  // hosts differ only by a "-pooler" suffix on the endpoint segment.
+  const siblings = spec.coLocatedVars ?? {};
+  for (const [, value] of Object.entries(siblings)) {
+    if (!value || typeof value !== "string") continue;
+    if (!value.startsWith("postgres://") && !value.startsWith("postgresql://")) continue;
+    const sibParsed = parseConnectionString(value);
+    if (!sibParsed?.host) continue;
+    if (sibParsed.host === host) continue;
+    if (sibParsed.host.includes("-pooler")) {
+      if (!out.pooled_host) out.pooled_host = sibParsed.host;
+    } else if (!out.unpooled_host) {
+      out.unpooled_host = sibParsed.host;
+    }
+  }
+
+  return out;
+}
+
+function parseConnectionString(
+  raw: string,
+): { roleName?: string; databaseName?: string; host?: string } | undefined {
+  try {
+    const url = new URL(raw);
+    const protocol = url.protocol.replace(/:$/, "");
+    if (protocol !== "postgres" && protocol !== "postgresql") return undefined;
+    return {
+      roleName: url.username ? decodeURIComponent(url.username) : undefined,
+      databaseName: url.pathname ? url.pathname.replace(/^\//, "") : undefined,
+      host: url.hostname || undefined,
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 function fromResponse(res: Response, op: string) {

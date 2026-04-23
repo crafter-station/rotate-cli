@@ -75,6 +75,82 @@ describe("adapter-upstash.create", () => {
     expect(result.error?.code).toBe("invalid_spec");
   });
 
+  test("auto-resolves database_id from Vercel KV REST URL currentValue", async () => {
+    mockFetch(
+      () =>
+        new Response(
+          JSON.stringify({
+            database_id: "db_vercel_kv",
+            rest_token: "rest_new",
+            last_password_rotation: "2026-04-22T00:00:00.000Z",
+          }),
+          { status: 200 },
+        ),
+    );
+    const result = await upstashAdapter.create(
+      {
+        secretId: "kv-url",
+        adapter: "upstash",
+        metadata: {},
+        currentValue: "https://awake-eagle-12345.kv.vercel-storage.com",
+        preload: {
+          dbByEndpoint: {
+            "awake-eagle-12345.upstash.io": {
+              id: "db_vercel_kv",
+              endpoint: "awake-eagle-12345.upstash.io",
+              teamId: null,
+            },
+          },
+          tokenHashToEndpoint: {},
+          selfTeamIds: [],
+          selfEmails: ["me@example.com"],
+        },
+      },
+      mockCtx,
+    );
+    expect(result.ok).toBe(true);
+    expect(calls[0]?.url).toContain("/v2/redis/reset-password/db_vercel_kv");
+  });
+
+  test("auto-resolves database_id from sibling KV_REST_API_URL", async () => {
+    mockFetch(
+      () =>
+        new Response(
+          JSON.stringify({
+            database_id: "db_via_sibling",
+            rest_token: "rest_new",
+          }),
+          { status: 200 },
+        ),
+    );
+    const result = await upstashAdapter.create(
+      {
+        secretId: "kv-token",
+        adapter: "upstash",
+        metadata: {},
+        currentValue: "AXoYAAIjcDEsome-rest-token",
+        coLocatedVars: {
+          KV_REST_API_URL: "https://awake-eagle-12345.kv.vercel-storage.com",
+        },
+        preload: {
+          dbByEndpoint: {
+            "awake-eagle-12345.upstash.io": {
+              id: "db_via_sibling",
+              endpoint: "awake-eagle-12345.upstash.io",
+              teamId: null,
+            },
+          },
+          tokenHashToEndpoint: {},
+          selfTeamIds: [],
+          selfEmails: [],
+        },
+      },
+      mockCtx,
+    );
+    expect(result.ok).toBe(true);
+    expect(calls[0]?.url).toContain("/v2/redis/reset-password/db_via_sibling");
+  });
+
   test("401 becomes auth_failed", async () => {
     mockFetch(() => new Response("unauthorized", { status: 401 }));
     const result = await upstashAdapter.create(

@@ -113,6 +113,36 @@ describe("adapter-neon-connection.create", () => {
     expect(result.error?.code).toBe("invalid_spec");
   });
 
+  test("auto-resolves metadata from currentValue + preload", async () => {
+    mockFetch(
+      () =>
+        new Response(JSON.stringify({ role: { password: "auto_pwd" } }), {
+          status: 200,
+        }),
+    );
+    const result = await neonConnectionAdapter.create(
+      {
+        secretId: "database-url",
+        adapter: "neon-connection",
+        metadata: {},
+        currentValue:
+          "postgresql://dbuser:oldpwd@ep-cool-darkness-123.us-east-2.aws.neon.tech/neondb?sslmode=require",
+        preload: {
+          knownOrgIds: new Set(["personal"]),
+          endpointToProject: new Map([
+            ["ep-cool-darkness-123", { projectId: "prj_auto", orgId: "personal" }],
+          ]),
+        },
+      },
+      mockCtx,
+    );
+    expect(result.ok).toBe(true);
+    expect(calls[0]?.url).toContain("/projects/prj_auto/branches/main/roles/dbuser/reset_password");
+    expect(result.data?.metadata.project_id).toBe("prj_auto");
+    expect(result.data?.metadata.database_name).toBe("neondb");
+    expect(result.data?.metadata.host).toBe("ep-cool-darkness-123.us-east-2.aws.neon.tech");
+  });
+
   test("401 becomes auth_failed", async () => {
     mockFetch(() => new Response("unauthorized", { status: 401 }));
     const result = await neonConnectionAdapter.create(
