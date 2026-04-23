@@ -42,60 +42,58 @@ const mockOwnershipCtx = {
   knownUserIds: new Set(["user_self"]),
 };
 
-describe("adapter-openai.create", () => {
-  test("calls project API and returns Secret", async () => {
-    mockFetch(
-      () =>
-        new Response(
-          JSON.stringify({
-            object: "organization.project.api_key",
-            id: "key_new",
-            name: "rotate-cli-main",
-            redacted_value: "sk-proj-********abcd",
-            value: "sk-proj-new",
-            created_at: 1711471533,
-            owner: {
-              type: "user",
-              user: { id: "user_123", name: "Jane Doe", email: "jane@example.com" },
-            },
-          }),
-          { status: 201 },
-        ),
-    );
+function mockIO(pasted: string, confirm = true): import("@rotate/core/types").PromptIO {
+  return {
+    isInteractive: true,
+    async promptSecret() {
+      return pasted;
+    },
+    async confirm() {
+      return confirm;
+    },
+    async select<T>() {
+      return undefined as unknown as T;
+    },
+    note(_: string) {},
+    async close() {},
+  } as unknown as import("@rotate/core/types").PromptIO;
+}
+
+describe("adapter-openai.create (manual-assist)", () => {
+  test("prompts for a new OpenAI key and returns it", async () => {
+    const io = mockIO("sk-proj-NEWPASTE123");
     const result = await openaiAdapter.create(
       {
         secretId: "main",
         adapter: "openai",
-        metadata: { name: "rotate-cli-main", project_id: "proj_abc" },
+        metadata: { project_id: "proj_abc" },
+        io,
       },
       mockCtx,
     );
     expect(result.ok).toBe(true);
-    expect(result.data?.value).toBe("sk-proj-new");
-    expect(result.data?.metadata.key_id).toBe("key_new");
+    expect(result.data?.value).toBe("sk-proj-NEWPASTE123");
+    expect(result.data?.metadata.manual_assist).toBe("true");
     expect(result.data?.metadata.project_id).toBe("proj_abc");
-    expect(calls[0]?.url).toContain("/v1/organization/projects/proj_abc/api_keys");
-    expect(calls[0]?.init?.method).toBe("POST");
   });
 
-  test("401 becomes auth_failed", async () => {
-    mockFetch(() => new Response("unauthorized", { status: 401 }));
+  test("rejects values that do not look like OpenAI keys", async () => {
+    const io = mockIO("not-a-key");
     const result = await openaiAdapter.create(
-      { secretId: "m", adapter: "openai", metadata: { project_id: "proj_abc" } },
-      mockCtx,
-    );
-    expect(result.ok).toBe(false);
-    expect(result.error?.code).toBe("auth_failed");
-  });
-
-  test("missing project_id with no resolver returns invalid_spec", async () => {
-    mockFetch(() => new Response("", { status: 200 }));
-    const result = await openaiAdapter.create(
-      { secretId: "m", adapter: "openai", metadata: {} },
+      { secretId: "main", adapter: "openai", metadata: {}, io },
       mockCtx,
     );
     expect(result.ok).toBe(false);
     expect(result.error?.code).toBe("invalid_spec");
+  });
+
+  test("without interactive IO returns unsupported", async () => {
+    const result = await openaiAdapter.create(
+      { secretId: "main", adapter: "openai", metadata: {} },
+      mockCtx,
+    );
+    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe("unsupported");
   });
 });
 
@@ -118,9 +116,9 @@ describe("adapter-openai.verify", () => {
   });
 });
 
-describe("adapter-openai.revoke", () => {
-  test("is idempotent on 404", async () => {
-    mockFetch(() => new Response("not found", { status: 404 }));
+describe("adapter-openai.revoke (manual-assist)", () => {
+  test("succeeds when user confirms dashboard deletion", async () => {
+    const io = mockIO("", true);
     const secret: Secret = {
       id: "key_old",
       provider: "openai",
@@ -128,8 +126,22 @@ describe("adapter-openai.revoke", () => {
       metadata: { key_id: "key_old", project_id: "proj_abc" },
       createdAt: new Date().toISOString(),
     };
-    const r = await openaiAdapter.revoke(secret, mockCtx);
+    const r = await openaiAdapter.revoke(secret, mockCtx, { io });
     expect(r.ok).toBe(true);
+  });
+
+  test("fails when user declines confirmation", async () => {
+    const io = mockIO("", false);
+    const secret: Secret = {
+      id: "key_old",
+      provider: "openai",
+      value: "sk-proj-old",
+      metadata: { key_id: "key_old" },
+      createdAt: new Date().toISOString(),
+    };
+    const r = await openaiAdapter.revoke(secret, mockCtx, { io });
+    expect(r.ok).toBe(false);
+    expect(r.error?.code).toBe("unsupported");
   });
 });
 

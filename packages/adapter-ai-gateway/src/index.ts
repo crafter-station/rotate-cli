@@ -3,6 +3,7 @@ import type {
   Adapter,
   AuthContext,
   OwnershipResult,
+  PromptIO,
   RotationResult,
   RotationSpec,
   Secret,
@@ -41,80 +42,121 @@ export const aiGatewayAdapter: Adapter = {
   name: PROVIDER,
   authRef: PROVIDER,
   authDefinition: vercelAiGatewayAuthDefinition,
+  // Vercel AI Gateway keys (`vck_*`) live on a private surface — the
+  // prior implementation posted to /v3/user/tokens, which returns a
+  // generic Vercel user token (NOT a vck_* key) and hits a 32/hour
+  // rate limit that trips immediately during bulk runs. Until Vercel
+  // exposes a supported /ai-gateway/keys endpoint, go manual-assist.
+  mode: "manual-assist",
 
   async auth(): Promise<AuthContext> {
     return resolveRegisteredAuth(PROVIDER);
   },
 
-  async create(spec: RotationSpec, ctx: AuthContext): Promise<RotationResult<Secret>> {
-    const url = new URL(`${VERCEL_BASE}/v3/user/tokens`);
-    const teamId = spec.metadata.teamId ?? spec.metadata.team_id;
-    const teamSlug = spec.metadata.teamSlug ?? spec.metadata.team_slug;
-    const name = spec.metadata.name ?? `ai-gateway-rotated-${Date.now()}`;
-    const expiresAt = parseExpiresAt(spec.metadata.expiresAt ?? spec.metadata.expires_at);
-
-    if (teamId) url.searchParams.set("teamId", teamId);
-    if (teamSlug) url.searchParams.set("slug", teamSlug);
-    if ((spec.metadata.expiresAt ?? spec.metadata.expires_at) && expiresAt === undefined) {
+  async create(spec: RotationSpec, _ctx: AuthContext): Promise<RotationResult<Secret>> {
+    const io = spec.io;
+    if (!io?.isInteractive) {
+      return {
+        ok: false,
+        error: makeError(
+          "unsupported",
+          "Vercel AI Gateway rotation is manual-assist — re-run with --manual-only from an interactive TTY",
+          PROVIDER,
+          { retryable: false },
+        ),
+      };
+    }
+    io.note(
+      [
+        "Vercel AI Gateway keys (vck_*) do not have a supported rotation API.",
+        "The /v3/user/tokens endpoint returns generic user tokens, not AI Gateway keys,",
+        "and is rate-limited to 32 requests/hour so it also trips on bulk runs.",
+        "",
+        "Open: https://vercel.com/dashboard/ai-gateway/api-keys",
+        `Target: ${spec.secretId}`,
+        "",
+        "Steps:",
+        "1. Create a new AI Gateway key with a descriptive name.",
+        "2. Copy the new key (vck_*).",
+        "3. Paste it below — rotate-cli propagates to all vercel-env consumers.",
+        "4. After the grace period, rotate prompts you to delete the OLD key.",
+      ].join("\n"),
+    );
+    const value = (await io.promptSecret("Paste the new Vercel AI Gateway key")).trim();
+    if (!value) {
+      return {
+        ok: false,
+        error: makeError("invalid_spec", "pasted AI Gateway key was empty", PROVIDER),
+      };
+    }
+    if (!AI_GATEWAY_KEY_RE.test(value)) {
       return {
         ok: false,
         error: makeError(
           "invalid_spec",
-          "metadata.expiresAt must be a millisecond timestamp",
+          "pasted value does not look like a Vercel AI Gateway key (expected vck_*)",
           PROVIDER,
         ),
       };
     }
-
-    const body: { name: string; expiresAt?: number } = { name };
-    if (expiresAt !== undefined) body.expiresAt = expiresAt;
-
-    const res = await fetch(url, {
-      method: "POST",
-      headers: authHeaders(ctx),
-      body: JSON.stringify(body),
-    });
-
-    if (!res.ok) return { ok: false, error: fromResponse(res, "create") };
-
-    const data = (await res.json()) as VercelCreateTokenResponse;
     return {
       ok: true,
       data: {
-        id: data.token.id,
+        id: spec.secretId,
         provider: PROVIDER,
-        value: data.bearerToken,
-        metadata: tokenMetadata(data.token, teamId, teamSlug),
-        createdAt: new Date(data.token.createdAt ?? Date.now()).toISOString(),
-        expiresAt: data.token.expiresAt ? new Date(data.token.expiresAt).toISOString() : undefined,
+        value,
+        metadata: { ...spec.metadata, manual_assist: "true" },
+        createdAt: new Date().toISOString(),
       },
     };
   },
 
   async verify(secret: Secret, _ctx: AuthContext): Promise<RotationResult<boolean>> {
-    const res = await fetch(`${VERCEL_BASE}/v2/user`, {
+    // Ping the AI Gateway /v1/models endpoint with the new key. Proves the
+    // vck_* is live without burning one of our 32/h generic-token budget.
+    const res = await fetch(`${AI_GATEWAY_BASE}/v1/models`, {
       headers: { Authorization: `Bearer ${secret.value}` },
     });
     if (!res.ok) return { ok: false, error: fromResponse(res, "verify") };
     return { ok: true, data: true };
   },
 
-  async revoke(secret: Secret, ctx: AuthContext): Promise<RotationResult<void>> {
-    const tokenId = secret.metadata.token_id ?? secret.id;
-    if (!tokenId) {
+  async revoke(
+    secret: Secret,
+    _ctx: AuthContext,
+    opts?: { io?: PromptIO },
+  ): Promise<RotationResult<void>> {
+    const io = opts?.io;
+    if (!io?.isInteractive) {
       return {
         ok: false,
-        error: makeError("invalid_spec", "metadata.token_id missing", PROVIDER),
+        error: makeError(
+          "unsupported",
+          "Vercel AI Gateway revoke is manual-assist — re-run with --manual-only from a TTY",
+          PROVIDER,
+          { retryable: false },
+        ),
       };
     }
-
-    const res = await fetch(`${VERCEL_BASE}/v3/user/tokens/${tokenId}`, {
-      method: "DELETE",
-      headers: authHeaders(ctx),
+    io.note(
+      [
+        "Vercel AI Gateway old key cleanup is manual-assist.",
+        "",
+        "Open: https://vercel.com/dashboard/ai-gateway/api-keys",
+        `Target: ${secret.id}`,
+        "",
+        "Delete the OLD key (not the one you just created).",
+      ].join("\n"),
+    );
+    const confirmed = await io.confirm("Confirm the old AI Gateway key has been deleted", {
+      initialValue: false,
     });
-
-    if (res.status === 404) return { ok: true, data: undefined };
-    if (!res.ok) return { ok: false, error: fromResponse(res, "revoke") };
+    if (!confirmed) {
+      return {
+        ok: false,
+        error: makeError("unsupported", "AI Gateway revoke was not confirmed", PROVIDER),
+      };
+    }
     return { ok: true, data: undefined };
   },
 

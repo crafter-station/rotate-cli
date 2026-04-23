@@ -29,58 +29,58 @@ afterEach(() => {
 
 const mockCtx: AuthContext = { kind: "env", varName: "VERCEL_TOKEN", token: "vercel_test" };
 
-describe("adapter-ai-gateway.create", () => {
-  test("calls Vercel API and returns Secret", async () => {
-    mockFetch(
-      () =>
-        new Response(
-          JSON.stringify({
-            token: {
-              id: "tok_new",
-              name: "ai-gateway-rotated-123",
-              type: "oauth2-token",
-              createdAt: 1632816536002,
-              expiresAt: 1632902936002,
-            },
-            bearerToken: "vck_new_token",
-          }),
-          { status: 200 },
-        ),
-    );
+function mockIO(pasted: string, confirm = true): import("@rotate/core/types").PromptIO {
+  return {
+    isInteractive: true,
+    async promptSecret() {
+      return pasted;
+    },
+    async confirm() {
+      return confirm;
+    },
+    async select<T>() {
+      return undefined as unknown as T;
+    },
+    note(_: string) {},
+    async close() {},
+  } as unknown as import("@rotate/core/types").PromptIO;
+}
+
+describe("adapter-ai-gateway.create (manual-assist)", () => {
+  test("prompts for new vck_* key and returns it", async () => {
+    const io = mockIO("vck_abcdefghijklmnopqrstuvwxyz0123456789abcd");
     const result = await aiGatewayAdapter.create(
-      {
-        secretId: "main",
-        adapter: "vercel-ai-gateway",
-        metadata: { teamId: "team_x", name: "ai-gateway-rotated-123" },
-      },
+      { secretId: "main", adapter: "vercel-ai-gateway", metadata: {}, io },
       mockCtx,
     );
     expect(result.ok).toBe(true);
-    expect(result.data?.id).toBe("tok_new");
-    expect(result.data?.provider).toBe("vercel-ai-gateway");
-    expect(result.data?.value).toBe("vck_new_token");
-    expect(result.data?.metadata.token_id).toBe("tok_new");
-    expect(result.data?.metadata.teamId).toBe("team_x");
-    expect(result.data?.createdAt).toBe("2021-09-28T08:08:56.002Z");
-    expect(result.data?.expiresAt).toBe("2021-09-29T08:08:56.002Z");
-    expect(calls[0]?.url).toContain("/v3/user/tokens");
-    expect(calls[0]?.url).toContain("teamId=team_x");
+    expect(result.data?.value).toMatch(/^vck_/);
+    expect(result.data?.metadata.manual_assist).toBe("true");
   });
 
-  test("401 becomes auth_failed", async () => {
-    mockFetch(() => new Response("unauthorized", { status: 401 }));
+  test("rejects values that do not match vck_* format", async () => {
+    const io = mockIO("not-a-vck-key");
+    const result = await aiGatewayAdapter.create(
+      { secretId: "main", adapter: "vercel-ai-gateway", metadata: {}, io },
+      mockCtx,
+    );
+    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe("invalid_spec");
+  });
+
+  test("without interactive IO returns unsupported", async () => {
     const result = await aiGatewayAdapter.create(
       { secretId: "main", adapter: "vercel-ai-gateway", metadata: {} },
       mockCtx,
     );
     expect(result.ok).toBe(false);
-    expect(result.error?.code).toBe("auth_failed");
+    expect(result.error?.code).toBe("unsupported");
   });
 });
 
 describe("adapter-ai-gateway.verify", () => {
-  test("calls /v2/user with new secret", async () => {
-    mockFetch(() => new Response(JSON.stringify({ user: { id: "usr_x" } }), { status: 200 }));
+  test("calls AI Gateway /v1/models with new secret", async () => {
+    mockFetch(() => new Response(JSON.stringify({ data: [] }), { status: 200 }));
     const secret: Secret = {
       id: "tok_new",
       provider: "vercel-ai-gateway",
@@ -90,16 +90,16 @@ describe("adapter-ai-gateway.verify", () => {
     };
     const result = await aiGatewayAdapter.verify(secret, mockCtx);
     expect(result.ok).toBe(true);
-    expect(calls[0]?.url).toMatch(/\/v2\/user$/);
+    expect(calls[0]?.url).toMatch(/\/v1\/models$/);
     expect((calls[0]?.init?.headers as Record<string, string>)?.Authorization).toBe(
       "Bearer vck_new_token",
     );
   });
 });
 
-describe("adapter-ai-gateway.revoke", () => {
-  test("is idempotent on 404", async () => {
-    mockFetch(() => new Response("not found", { status: 404 }));
+describe("adapter-ai-gateway.revoke (manual-assist)", () => {
+  test("succeeds when user confirms", async () => {
+    const io = mockIO("", true);
     const secret: Secret = {
       id: "tok_old",
       provider: "vercel-ai-gateway",
@@ -107,7 +107,7 @@ describe("adapter-ai-gateway.revoke", () => {
       metadata: { token_id: "tok_old" },
       createdAt: new Date().toISOString(),
     };
-    const result = await aiGatewayAdapter.revoke(secret, mockCtx);
+    const result = await aiGatewayAdapter.revoke(secret, mockCtx, { io });
     expect(result.ok).toBe(true);
   });
 });

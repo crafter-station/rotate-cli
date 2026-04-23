@@ -6,6 +6,7 @@ import type {
   OwnershipOptions,
   OwnershipPreload,
   OwnershipResult,
+  PromptIO,
   RotationResult,
   RotationSpec,
   Secret,
@@ -72,6 +73,16 @@ export const openaiAdapter: Adapter = {
   name: "openai",
   authRef: "openai",
   authDefinition: openaiAuthDefinition,
+  // OpenAI user project keys (`sk-proj-*`) can be LISTED via
+  // /v1/organization/projects/{pid}/api_keys but NOT created there
+  // (POST returns 405). Keys are user-scoped and created only in the
+  // dashboard. So this path is manual-assist: we deep-link to the project
+  // API keys page, user pastes the new `sk-proj-*`, we propagate.
+  //
+  // (`sk-svcacct-*` service-account keys DO rotate via API — a future
+  // commit can split this into two sub-adapters once any of Hunter's
+  // projects actually uses service accounts.)
+  mode: "manual-assist",
 
   async auth(): Promise<AuthContext> {
     return resolveRegisteredAuth("openai");
@@ -158,50 +169,67 @@ export const openaiAdapter: Adapter = {
     };
   },
 
-  async create(spec: RotationSpec, ctx: AuthContext): Promise<RotationResult<Secret>> {
+  async create(spec: RotationSpec, _ctx: AuthContext): Promise<RotationResult<Secret>> {
+    const io = spec.io;
+    if (!io?.isInteractive) {
+      return {
+        ok: false,
+        error: makeError(
+          "unsupported",
+          "OpenAI rotation is manual-assist (user project keys cannot be created via API) — re-run with --manual-only from an interactive TTY",
+          "openai",
+          { retryable: false },
+        ),
+      };
+    }
     const projectId = spec.metadata.project_id ?? resolveProjectId(spec);
-    if (!projectId) {
+    const dashboardUrl = projectId
+      ? `https://platform.openai.com/settings/organization/projects/${projectId}/api-keys`
+      : "https://platform.openai.com/api-keys";
+    io.note(
+      [
+        "OpenAI Secret Key rotation is manual-assist: the /v1/organization/projects/{pid}/api_keys",
+        "endpoint is read-only (POST returns 405). User project keys are created in the dashboard only.",
+        "",
+        `Open: ${dashboardUrl}`,
+        `Target: ${spec.secretId}`,
+        "",
+        "Steps:",
+        "1. Create a new user API key named e.g. 'rotate-cli-" + Date.now().toString(36) + "'.",
+        "2. Copy the new key value (sk-proj-*).",
+        "3. Paste it below. rotate-cli will propagate it to every vercel-env consumer.",
+        "4. After the grace period, rotate will prompt you to delete the OLD key from the dashboard.",
+      ].join("\n"),
+    );
+    const value = (await io.promptSecret("Paste the new OpenAI API key")).trim();
+    if (!value) {
+      return {
+        ok: false,
+        error: makeError("invalid_spec", "pasted OpenAI API key was empty", "openai"),
+      };
+    }
+    if (!/^sk-/.test(value)) {
       return {
         ok: false,
         error: makeError(
           "invalid_spec",
-          "metadata.project_id is required (could not auto-resolve from current value redacted prefix)",
+          "pasted value does not look like an OpenAI API key (expected sk-proj-*, sk-svcacct-*, or sk-admin-*)",
           "openai",
         ),
-      };
-    }
-    const name = spec.metadata.name ?? `rotate-cli-${spec.secretId}-${Date.now()}`;
-    const res = await request(`${OPENAI_API_BASE}/organization/projects/${projectId}/api_keys`, {
-      method: "POST",
-      headers: authHeaders(ctx.token),
-      body: JSON.stringify({ name }),
-    });
-    if (res instanceof Error) return { ok: false, error: networkError(res) };
-    if (!res.ok) return { ok: false, error: fromResponse(res, "create") };
-    const data = (await res.json()) as OpenAIProjectApiKey;
-    if (!data.value) {
-      return {
-        ok: false,
-        error: makeError("provider_error", "openai create: response missing key value", "openai", {
-          retryable: false,
-        }),
       };
     }
     return {
       ok: true,
       data: {
-        id: data.id,
+        id: spec.secretId,
         provider: "openai",
-        value: data.value,
+        value,
         metadata: compactMetadata({
-          key_id: data.id,
-          project_id: projectId,
-          name: data.name,
-          redacted_value: data.redacted_value,
-          owner_type: data.owner?.type,
-          owner_email: data.owner?.user?.email,
+          ...spec.metadata,
+          manual_assist: "true",
+          project_id: projectId ?? spec.metadata.project_id,
         }),
-        createdAt: new Date(data.created_at * 1000).toISOString(),
+        createdAt: new Date().toISOString(),
       },
     };
   },
@@ -226,30 +254,47 @@ export const openaiAdapter: Adapter = {
     return { ok: false, error: fromStatus(res.status, "verify") };
   },
 
-  async revoke(secret: Secret, ctx: AuthContext): Promise<RotationResult<void>> {
-    const projectId = secret.metadata.project_id;
-    const keyId = secret.metadata.key_id ?? secret.id;
-    if (!projectId) {
+  async revoke(
+    secret: Secret,
+    _ctx: AuthContext,
+    opts?: { io?: PromptIO },
+  ): Promise<RotationResult<void>> {
+    const io = opts?.io;
+    if (!io?.isInteractive) {
       return {
         ok: false,
         error: makeError(
-          "invalid_spec",
-          "metadata.project_id is required on the old secret for revoke",
+          "unsupported",
+          "OpenAI revoke is manual-assist — re-run with --manual-only from a TTY to confirm deletion",
           "openai",
           { retryable: false },
         ),
       };
     }
-    const res = await request(
-      `${OPENAI_API_BASE}/organization/projects/${projectId}/api_keys/${keyId}`,
-      {
-        method: "DELETE",
-        headers: authHeaders(ctx.token),
-      },
+    const projectId = secret.metadata.project_id;
+    const dashboardUrl = projectId
+      ? `https://platform.openai.com/settings/organization/projects/${projectId}/api-keys`
+      : "https://platform.openai.com/api-keys";
+    io.note(
+      [
+        "OpenAI old key cleanup is manual-assist.",
+        "",
+        `Open: ${dashboardUrl}`,
+        `Target: ${secret.id}`,
+        "",
+        "Find the OLD key (not the one you just created) and delete it.",
+        "Confirm only after the old key is gone.",
+      ].join("\n"),
     );
-    if (res instanceof Error) return { ok: false, error: networkError(res) };
-    if (res.status === 404) return { ok: true, data: undefined };
-    if (!res.ok) return { ok: false, error: fromResponse(res, "revoke") };
+    const confirmed = await io.confirm("Confirm the old OpenAI API key has been deleted", {
+      initialValue: false,
+    });
+    if (!confirmed) {
+      return {
+        ok: false,
+        error: makeError("unsupported", "OpenAI revoke was not confirmed", "openai"),
+      };
+    }
     return { ok: true, data: undefined };
   },
 
