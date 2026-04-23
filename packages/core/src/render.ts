@@ -629,6 +629,9 @@ export type ApplyProgressEvent =
       currentSlug?: string;
     }
   | { kind: "siblings-done"; decrypted: number; totalProjects: number; durationMs: number }
+  | { kind: "resolving-start"; total: number }
+  | { kind: "resolving-progress"; done: number; total: number; resolved: number }
+  | { kind: "resolving-done"; resolved: number; total: number; durationMs: number }
   | { kind: "dedup"; totalEntries: number; uniqueGroups: number }
   | { kind: "start"; total: number }
   | { kind: "rotation-start"; index: number; total: number; secretId: string; adapter: string }
@@ -636,6 +639,13 @@ export type ApplyProgressEvent =
       kind: "rotation-step";
       index: number;
       step: "ownership" | "create" | "propagate" | "trigger" | "verify";
+    }
+  | {
+      kind: "rotation-consumer-progress";
+      index: number;
+      step: "propagate" | "trigger" | "verify";
+      done: number;
+      total: number;
     }
   | {
       kind: "rotation-done";
@@ -661,6 +671,8 @@ export function createApplyProgressRenderer(): {
     secretId: string;
     adapter: string;
     step: string;
+    consumerDone?: number;
+    consumerTotal?: number;
   } | null = null;
   let siblings: {
     completed: number;
@@ -668,14 +680,21 @@ export function createApplyProgressRenderer(): {
     decrypted: number;
     currentSlug?: string;
   } | null = null;
+  let resolving: {
+    done: number;
+    total: number;
+    resolved: number;
+  } | null = null;
   let lineActive = false;
   const siblingsStartedAt = { ts: 0 };
+  const resolvingStartedAt = { ts: 0 };
 
   const interval = isTTY
     ? setInterval(() => {
         frame = (frame + 1) % frames.length;
         if (active) drawActive();
         else if (siblings) drawSiblings();
+        else if (resolving) drawResolving();
       }, 80)
     : null;
 
@@ -695,7 +714,11 @@ export function createApplyProgressRenderer(): {
     clearLine();
     const spin = pc.cyan(frames[frame]);
     const progress = pc.dim(`[${active.index}/${active.total}]`);
-    const step = pc.dim(active.step);
+    const consumerPart =
+      active.consumerDone !== undefined && active.consumerTotal !== undefined
+        ? pc.dim(` (${active.consumerDone}/${active.consumerTotal})`)
+        : "";
+    const step = pc.dim(`${active.step}${consumerPart}`);
     process.stdout.write(
       `  ${spin} ${progress} ${active.secretId.padEnd(30)} ${pc.dim(`[${active.adapter}]`)} ${step}`,
     );
@@ -717,11 +740,27 @@ export function createApplyProgressRenderer(): {
     lineActive = true;
   }
 
+  function drawResolving(): void {
+    if (!resolving || !isTTY) return;
+    clearLine();
+    const spin = pc.cyan(frames[frame]);
+    const pct = resolving.total > 0 ? resolving.done / resolving.total : 0;
+    const elapsed = resolvingStartedAt.ts > 0 ? (Date.now() - resolvingStartedAt.ts) / 1000 : 0;
+    const rate = elapsed > 0 ? Math.round(resolving.done / elapsed) : 0;
+    const resolved = pc.dim(`· ${resolving.resolved} resolved`);
+    const rateStr = rate > 0 ? pc.dim(` · ${rate}/s`) : "";
+    process.stdout.write(
+      `  ${spin} ${bar(pct)}  ${resolving.done}/${resolving.total} ${resolved}${rateStr}`,
+    );
+    lineActive = true;
+  }
+
   function writeStatic(line: string): void {
     clearLine();
     process.stdout.write(`${line}\n`);
     if (active) drawActive();
     else if (siblings) drawSiblings();
+    else if (resolving) drawResolving();
   }
 
   function handle(event: ApplyProgressEvent): void {
@@ -764,6 +803,27 @@ export function createApplyProgressRenderer(): {
       writeStatic(
         `  ${pc.green("✓")} vercel-siblings     ${pc.dim(`· ${event.decrypted}/${event.totalProjects} decrypted · ${duration}`)}`,
       );
+    } else if (event.kind === "resolving-start") {
+      writeStatic(`\nResolving current values for ${event.total} secret(s)...`);
+      resolving = { done: 0, total: event.total, resolved: 0 };
+      resolvingStartedAt.ts = Date.now();
+      drawResolving();
+    } else if (event.kind === "resolving-progress") {
+      if (resolving) {
+        resolving.done = event.done;
+        resolving.total = event.total;
+        resolving.resolved = event.resolved;
+        drawResolving();
+      }
+    } else if (event.kind === "resolving-done") {
+      resolving = null;
+      const duration =
+        event.durationMs > 1000
+          ? `${(event.durationMs / 1000).toFixed(1)}s`
+          : `${event.durationMs}ms`;
+      writeStatic(
+        `  ${pc.green("✓")} current-values      ${pc.dim(`· ${event.resolved}/${event.total} resolved · ${duration}`)}`,
+      );
     } else if (event.kind === "dedup") {
       if (event.uniqueGroups < event.totalEntries) {
         writeStatic(
@@ -784,6 +844,15 @@ export function createApplyProgressRenderer(): {
     } else if (event.kind === "rotation-step") {
       if (active && active.index === event.index) {
         active.step = `${event.step}...`;
+        active.consumerDone = undefined;
+        active.consumerTotal = undefined;
+        drawActive();
+      }
+    } else if (event.kind === "rotation-consumer-progress") {
+      if (active && active.index === event.index) {
+        active.step = `${event.step}...`;
+        active.consumerDone = event.done;
+        active.consumerTotal = event.total;
         drawActive();
       }
     } else if (event.kind === "rotation-done") {
@@ -817,6 +886,7 @@ export function createApplyProgressRenderer(): {
     clearLine();
     active = null;
     siblings = null;
+    resolving = null;
   }
 
   return { handle, stop };

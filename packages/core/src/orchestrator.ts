@@ -40,6 +40,13 @@ export interface ApplyOptions {
    *  into the apply progress renderer so the user sees per-rotation stage
    *  transitions (ownership -> create -> propagate -> trigger -> verify). */
   onStep?: (step: "ownership" | "create" | "propagate" | "trigger" | "verify") => void;
+  /** Called after each consumer operation finishes within propagate/trigger/
+   *  verify so the CLI can show "N/M consumers synced" live. */
+  onConsumerProgress?: (progress: {
+    step: "propagate" | "trigger" | "verify";
+    done: number;
+    total: number;
+  }) => void;
 }
 
 export interface ApplyResult {
@@ -203,7 +210,7 @@ export async function applyRotation(
 
   // Step 2: Propagate (parallel fail-fast).
   opts.onStep?.("propagate");
-  await propagateAll(rotation, opts.parallel ?? 10);
+  await propagateAll(rotation, opts.parallel ?? 10, opts.onConsumerProgress);
   saveCheckpoint({
     rotationId: rotation.id,
     rotation,
@@ -213,7 +220,7 @@ export async function applyRotation(
 
   // Step 3: Trigger redeploys (parallel, best-effort).
   opts.onStep?.("trigger");
-  await triggerAll(rotation);
+  await triggerAll(rotation, opts.onConsumerProgress);
   saveCheckpoint({
     rotationId: rotation.id,
     rotation,
@@ -239,7 +246,7 @@ export async function applyRotation(
       audit(opts.auditLog, rotation);
       return { rotation, envelopeStatus: "error" };
     }
-    await verifyAllConsumers(rotation);
+    await verifyAllConsumers(rotation, opts.onConsumerProgress);
   }
 
   rotation.status = "in_grace";
@@ -259,11 +266,19 @@ export async function applyRotation(
   };
 }
 
-async function propagateAll(rotation: Rotation, parallel: number): Promise<void> {
+async function propagateAll(
+  rotation: Rotation,
+  parallel: number,
+  onConsumerProgress?: ApplyOptions["onConsumerProgress"],
+): Promise<void> {
   if (!rotation.newSecret) return;
-  const tasks = rotation.consumers.map(
-    (state) => () => propagateOne(rotation, state, rotation.newSecret!),
-  );
+  const total = rotation.consumers.length;
+  let done = 0;
+  const tasks = rotation.consumers.map((state) => async () => {
+    await propagateOne(rotation, state, rotation.newSecret!);
+    done++;
+    onConsumerProgress?.({ step: "propagate", done, total });
+  });
   await runPool(tasks, parallel);
 }
 
@@ -294,12 +309,23 @@ async function propagateOne(
   }
 }
 
-async function triggerAll(rotation: Rotation): Promise<void> {
+async function triggerAll(
+  rotation: Rotation,
+  onConsumerProgress?: ApplyOptions["onConsumerProgress"],
+): Promise<void> {
+  const total = rotation.consumers.length;
+  let done = 0;
   for (const state of rotation.consumers) {
-    if (state.status !== "propagated") continue;
+    if (state.status !== "propagated") {
+      done++;
+      onConsumerProgress?.({ step: "trigger", done, total });
+      continue;
+    }
     const consumer = getConsumer(state.target.type);
     if (!consumer?.trigger) {
       state.status = "triggered"; // no-op triggers count as done
+      done++;
+      onConsumerProgress?.({ step: "trigger", done, total });
       continue;
     }
     try {
@@ -312,18 +338,31 @@ async function triggerAll(rotation: Rotation): Promise<void> {
     } catch (cause) {
       state.error = makeError("provider_error", String(cause), consumer.name, { cause });
     }
+    done++;
+    onConsumerProgress?.({ step: "trigger", done, total });
   }
 }
 
-async function verifyAllConsumers(rotation: Rotation): Promise<void> {
+async function verifyAllConsumers(
+  rotation: Rotation,
+  onConsumerProgress?: ApplyOptions["onConsumerProgress"],
+): Promise<void> {
   if (!rotation.newSecret) return;
+  const total = rotation.consumers.length;
+  let done = 0;
   for (const state of rotation.consumers) {
-    if (state.status !== "triggered" && state.status !== "propagated") continue;
+    if (state.status !== "triggered" && state.status !== "propagated") {
+      done++;
+      onConsumerProgress?.({ step: "verify", done, total });
+      continue;
+    }
     const consumer = getConsumer(state.target.type);
     if (!consumer?.verify) {
       // No verify — optimistically mark synced.
       state.status = "synced";
       state.verifiedAt = new Date().toISOString();
+      done++;
+      onConsumerProgress?.({ step: "verify", done, total });
       continue;
     }
     try {
@@ -336,6 +375,8 @@ async function verifyAllConsumers(rotation: Rotation): Promise<void> {
     } catch {
       /* keep status as-is, verify is best-effort for now */
     }
+    done++;
+    onConsumerProgress?.({ step: "verify", done, total });
   }
 }
 

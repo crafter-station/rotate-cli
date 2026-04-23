@@ -741,12 +741,19 @@ export async function runCli(argv: string[]): Promise<void> {
           coLocatedVars?: Record<string, string>;
         };
         const groups = new Map<string, Group>();
-        for (const secret of selected) {
+        const resolvingStart = Date.now();
+        if (!noOwnershipCheck && selected.length > 0) {
+          applyProgress?.handle({ kind: "resolving-start", total: selected.length });
+        }
+        let resolvedCount = 0;
+        for (let si = 0; si < selected.length; si++) {
+          const secret = selected[si]!;
           const projectKey = secret.consumers.find((c) => c.type === "vercel-env")?.params.project;
           const preFetchedVars = projectKey ? applyProjectVars.get(projectKey) : undefined;
           const { value: currentValue } = noOwnershipCheck
             ? { value: null }
             : await resolveCurrentValue(secret, { preFetchedVars });
+          if (currentValue) resolvedCount++;
           // Fallback when value can't be resolved: each such entry goes into
           // its own group keyed by secret.id, preserving 1-per-entry semantics.
           const key = currentValue
@@ -763,6 +770,22 @@ export async function runCli(argv: string[]): Promise<void> {
               coLocatedVars: preFetchedVars,
             });
           }
+          if (!noOwnershipCheck) {
+            applyProgress?.handle({
+              kind: "resolving-progress",
+              done: si + 1,
+              total: selected.length,
+              resolved: resolvedCount,
+            });
+          }
+        }
+        if (!noOwnershipCheck && selected.length > 0) {
+          applyProgress?.handle({
+            kind: "resolving-done",
+            resolved: resolvedCount,
+            total: selected.length,
+            durationMs: Date.now() - resolvingStart,
+          });
         }
 
         const groupList = [...groups.values()];
@@ -813,6 +836,14 @@ export async function runCli(argv: string[]): Promise<void> {
             noOwnershipCheck,
             io: applyIO,
             onStep: (step) => applyProgress?.handle({ kind: "rotation-step", index, step }),
+            onConsumerProgress: (p) =>
+              applyProgress?.handle({
+                kind: "rotation-consumer-progress",
+                index,
+                step: p.step,
+                done: p.done,
+                total: p.total,
+              }),
           });
           results.push(r);
           applyProgress?.handle({
