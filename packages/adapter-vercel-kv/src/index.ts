@@ -21,6 +21,7 @@ import type { Adapter, AuthContext } from "@rotate/core/types";
 
 export const vercelKvAdapter: Adapter = {
   name: "vercel-kv",
+  mode: "no-check",
 
   async auth(): Promise<AuthContext> {
     // Alias: allow Vercel-branded env vars so users who think of this as

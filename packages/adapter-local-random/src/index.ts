@@ -64,6 +64,7 @@ function generate(bytes: number, encoding: Encoding, prefix: string): string {
 
 export const localRandomAdapter: Adapter = {
   name: "local-random",
+  mode: "no-check",
 
   async auth(): Promise<AuthContext> {
     // No remote credentials — return a placeholder env ctx so the orchestrator

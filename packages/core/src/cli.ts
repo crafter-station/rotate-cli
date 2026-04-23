@@ -361,21 +361,58 @@ export async function runCli(argv: string[]): Promise<void> {
     .description("verify auth for all registered adapters/consumers")
     .action(async () => {
       const started = Date.now();
-      const rows: Array<{ kind: string; name: string; ok: boolean; error?: string }> = [];
+      const rows: Array<{
+        kind: string;
+        name: string;
+        ok: boolean;
+        mode?: "auto" | "manual-assist" | "no-check";
+        authStatus: "ok" | "missing" | "not-required";
+        error?: string;
+      }> = [];
       for (const adapter of listAdapters()) {
+        const mode: "auto" | "manual-assist" | "no-check" = adapter.mode ?? "auto";
         try {
           await adapter.auth();
-          rows.push({ kind: "adapter", name: adapter.name, ok: true });
+          rows.push({
+            kind: "adapter",
+            name: adapter.name,
+            ok: true,
+            mode,
+            authStatus: "ok",
+          });
         } catch (err) {
-          rows.push({ kind: "adapter", name: adapter.name, ok: false, error: String(err) });
+          // Manual-assist adapters do not require pre-configured auth because
+          // the user pastes a fresh secret during each apply. no-check adapters
+          // never auth against a provider. Both cases are informational, not
+          // blocking, so they do not count toward the non-zero exit.
+          const bypass = mode === "manual-assist" || mode === "no-check";
+          rows.push({
+            kind: "adapter",
+            name: adapter.name,
+            ok: bypass,
+            mode,
+            authStatus: bypass ? "not-required" : "missing",
+            error: bypass ? undefined : String(err),
+          });
         }
       }
       for (const consumer of listConsumers()) {
         try {
           await consumer.auth();
-          rows.push({ kind: "consumer", name: consumer.name, ok: true });
+          rows.push({
+            kind: "consumer",
+            name: consumer.name,
+            ok: true,
+            authStatus: "ok",
+          });
         } catch (err) {
-          rows.push({ kind: "consumer", name: consumer.name, ok: false, error: String(err) });
+          rows.push({
+            kind: "consumer",
+            name: consumer.name,
+            ok: false,
+            authStatus: "missing",
+            error: String(err),
+          });
         }
       }
       const failing = rows.filter((r) => !r.ok);

@@ -20,48 +20,73 @@ export interface DoctorRow {
   kind: string;
   name: string;
   ok: boolean;
+  mode?: "auto" | "manual-assist" | "no-check";
+  authStatus?: "ok" | "missing" | "not-required";
   error?: string;
 }
 
 export function renderDoctor(rows: DoctorRow[]): void {
   const adapters = rows.filter((r) => r.kind === "adapter");
   const consumers = rows.filter((r) => r.kind === "consumer");
-  const failing = rows.filter((r) => !r.ok);
+  const blocking = rows.filter((r) => r.authStatus === "missing");
 
-  const total = rows.length;
-  const ok = rows.filter((r) => r.ok).length;
+  const authOk = rows.filter((r) => r.authStatus === "ok").length;
+  const authBypass = rows.filter((r) => r.authStatus === "not-required").length;
 
   print(pc.bold("rotate-cli doctor"));
   print("");
   print(
-    `${ok}/${total} authenticated (${adapters.length} adapters, ${consumers.length} consumers)`,
+    `${authOk} authenticated, ${authBypass} not required (${adapters.length} adapters, ${consumers.length} consumers)`,
   );
   print("");
 
   print(pc.dim("Adapters"));
   for (const r of adapters) {
-    const glyph = r.ok ? pc.green("✓") : pc.red("✗");
-    const suffix = r.ok ? "" : pc.dim(` — ${truncate(r.error ?? "", 60)}`);
-    print(`  ${glyph} ${r.name}${suffix}`);
+    const glyph = glyphFor(r);
+    const tag = tagFor(r);
+    const suffix = r.authStatus === "missing" ? pc.dim(`, ${truncate(r.error ?? "", 60)}`) : "";
+    print(`  ${glyph} ${r.name.padEnd(22)} ${tag}${suffix}`);
   }
 
   if (consumers.length > 0) {
     print("");
     print(pc.dim("Consumers"));
     for (const r of consumers) {
-      const glyph = r.ok ? pc.green("✓") : pc.red("✗");
-      const suffix = r.ok ? "" : pc.dim(` — ${truncate(r.error ?? "", 60)}`);
+      const glyph = glyphFor(r);
+      const suffix = r.authStatus === "missing" ? pc.dim(`, ${truncate(r.error ?? "", 60)}`) : "";
       print(`  ${glyph} ${r.name}${suffix}`);
     }
   }
 
-  if (failing.length > 0) {
+  if (blocking.length > 0) {
     print("");
     print(pc.dim("Next:"));
-    for (const f of failing) {
+    for (const f of blocking) {
       print(`  ${pc.yellow("→")} rotate-cli auth login ${f.name}`);
     }
   }
+
+  const manualCount = adapters.filter((r) => r.mode === "manual-assist").length;
+  if (manualCount > 0) {
+    print("");
+    print(
+      pc.dim(
+        `Note: ${manualCount} manual-assist adapter(s) shown as ○ need no pre-configured auth. You paste a fresh secret during each \`apply --manual-only\`.`,
+      ),
+    );
+  }
+}
+
+function glyphFor(r: DoctorRow): string {
+  if (r.authStatus === "ok") return pc.green("✓");
+  if (r.authStatus === "not-required") return pc.dim("○");
+  return pc.red("✗");
+}
+
+function tagFor(r: DoctorRow): string {
+  if (!r.mode || r.mode === "auto") return "";
+  if (r.mode === "manual-assist") return pc.dim("[manual-assist]");
+  return pc.dim("[no-check]");
 }
 
 // ---------------------------------------------------------------------------

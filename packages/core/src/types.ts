@@ -169,10 +169,13 @@ export interface Adapter {
    *   - "manual-assist": create/revoke pause with interactive prompts asking
    *     the user to perform steps in the provider dashboard, then paste the
    *     new value. Incompatible with agent-mode and CI.
+   *   - "no-check": alias or locally-generated adapter. The doctor command
+   *     skips the auth check because there is no provider to authenticate
+   *     against (e.g. local-random generates SESSION_SECRET via crypto).
    *
    * The apply command splits execution into two phases based on this field.
    */
-  readonly mode?: "auto" | "manual-assist";
+  readonly mode?: "auto" | "manual-assist" | "no-check";
   auth(): Promise<AuthContext>;
   create(spec: RotationSpec, ctx: AuthContext): Promise<RotationResult<Secret>>;
   verify(secret: Secret, ctx: AuthContext): Promise<RotationResult<boolean>>;
