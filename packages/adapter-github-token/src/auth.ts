@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { readStoredAuthContext, writeStoredCredential } from "@rotate/core/auth-store";
 import type { AuthContext, AuthDefinition, PromptAnswers, PromptIO } from "@rotate/core/types";
 
@@ -42,8 +43,10 @@ export const githubTokenAuthDefinition: AuthDefinition = {
     }
     const stored = readStoredAuthContext("github-token");
     if (stored) return stored;
+    const cli = readGhCliAuthContext();
+    if (cli) return cli;
     throw new Error(
-      "github-token auth unavailable: set GITHUB_TOKEN or run `rotate auth login github-token`",
+      "github-token auth unavailable: set GITHUB_TOKEN, run `rotate auth login github-token`, or run `gh auth login`",
     );
   },
 
@@ -112,5 +115,31 @@ async function request(url: string, init: RequestInit): Promise<Response | Error
     return await fetch(url, init);
   } catch (cause) {
     return cause instanceof Error ? cause : new Error(String(cause));
+  }
+}
+
+/**
+ * Piggyback on the `gh` CLI if the user has already authenticated there.
+ * Mirrors how the vercel-token adapter reads ~/.local/share/com.vercel.cli/auth.json.
+ *
+ * We shell out to `gh auth token` instead of parsing the keychain / config
+ * file directly because gh stores credentials differently across platforms
+ * (macOS keychain, Linux libsecret, Windows credential manager) and the CLI
+ * already knows how to resolve the right one.
+ *
+ * Fails silently so the caller falls through to the final "unavailable"
+ * error when gh is not installed or the user is logged out.
+ */
+function readGhCliAuthContext(): AuthContext | null {
+  try {
+    const token = execFileSync("gh", ["auth", "token"], {
+      stdio: ["ignore", "pipe", "ignore"],
+      encoding: "utf8",
+      timeout: 3000,
+    }).trim();
+    if (!token) return null;
+    return { kind: "cli-piggyback", tool: "gh", token };
+  } catch {
+    return null;
   }
 }
